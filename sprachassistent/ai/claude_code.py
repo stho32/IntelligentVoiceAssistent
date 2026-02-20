@@ -1,5 +1,68 @@
-"""Claude Code Subprocess-Wrapper.
+"""Claude Code subprocess wrapper.
 
-Ruft Claude Code als Subprocess auf, um Befehle im
-Kontext des Notizen-Ordners auszufuehren.
+Sends transcribed user commands to Claude Code via the --print flag
+for non-interactive processing in the context of the notes directory.
 """
+
+import subprocess
+from pathlib import Path
+
+
+class ClaudeCodeBackend:
+    """AI backend using Claude Code as a subprocess.
+
+    Args:
+        working_directory: Directory where Claude Code operates (notes folder).
+        system_prompt: System prompt text for Claude Code.
+        timeout: Maximum seconds to wait for a response.
+    """
+
+    def __init__(
+        self,
+        working_directory: str | Path,
+        system_prompt: str = "",
+        timeout: int = 120,
+    ):
+        self.working_directory = str(working_directory)
+        self.system_prompt = system_prompt
+        self.timeout = timeout
+
+    def ask(self, user_message: str) -> str:
+        """Send a message to Claude Code and get a response.
+
+        Args:
+            user_message: The transcribed user command.
+
+        Returns:
+            Claude Code's text response.
+
+        Raises:
+            RuntimeError: If Claude Code returns a non-zero exit code.
+            TimeoutError: If the command exceeds the timeout.
+        """
+        cmd = ["claude", "--print"]
+        if self.system_prompt:
+            cmd.extend(["--system-prompt", self.system_prompt])
+        cmd.append(user_message)
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=self.timeout,
+                cwd=self.working_directory,
+            )
+        except subprocess.TimeoutExpired as e:
+            raise TimeoutError(f"Claude Code did not respond within {self.timeout}s") from e
+
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"Claude Code exited with code {result.returncode}: {result.stderr.strip()}"
+            )
+
+        response = result.stdout.strip()
+        if not response:
+            raise RuntimeError("Claude Code returned an empty response.")
+
+        return response
