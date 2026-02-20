@@ -4,6 +4,7 @@ Sends transcribed user commands to Claude Code via the --print flag
 for non-interactive processing in the context of the notes directory.
 """
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -52,6 +53,9 @@ class ClaudeCodeBackend:
 
         log.info("Asking Claude Code: %s", user_message[:80])
 
+        # Remove CLAUDECODE env var to allow running inside a Claude Code session
+        env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+
         try:
             result = subprocess.run(
                 cmd,
@@ -59,6 +63,7 @@ class ClaudeCodeBackend:
                 text=True,
                 timeout=self.timeout,
                 cwd=self.working_directory,
+                env=env,
             )
         except subprocess.TimeoutExpired as e:
             raise AIBackendError(f"Claude Code did not respond within {self.timeout}s") from e
