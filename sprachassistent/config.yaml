@@ -1,25 +1,30 @@
 wake_word:
-  engine: porcupine
-  keyword: computer
-  sensitivity: 0.6          # 0.0-1.0, hoeher = empfindlicher
+  engine: openwakeword
+  model_path: "models/computer_v2.onnx"
+  threshold: 0.5
+  inference_framework: onnx
 
 stt:
   provider: openai
   model: whisper-1
-  language: de              # primaere Sprache
+  language: de
 
 ai:
-  backend: claude-code      # oder "claude-api"
-  working_directory: "C:\\Projekte\\Training2"
+  backend: claude-code
+  working_directory: "~/Projekte/Training2"
   system_prompt_path: "ai/prompts/system.md"
 
 tts:
-  provider: openai           # oder "edge-tts"
+  provider: openai
   model: tts-1
   voice: onyx
   speed: 1.0
 
 audio:
   sample_rate: 16000
-  silence_threshold_sec: 1.5  # Pause bis Aufnahme stoppt
-  max_recording_sec: 30       # Maximale Aufnahmelaenge
+  channels: 1
+  chunk_size: 1280               # 80ms at 16kHz (wake-word frame size)
+  vad_chunk_size: 512            # 32ms at 16kHz (VAD frame size)
+  silence_threshold_sec: 1.5     # pause until recording stops
+  max_recording_sec: 30
+  vad_threshold: 0.5             # speech probability threshold
