@@ -1,7 +1,7 @@
 """Claude Code subprocess wrapper.
 
-Sends transcribed user commands to Claude Code via the --print flag
-for non-interactive processing in the context of the notes directory.
+Sends transcribed user commands to Claude Code via the --print flag.
+Maintains a persistent conversation using --continue for follow-up turns.
 """
 
 import os
@@ -16,6 +16,10 @@ log = get_logger("ai.claude_code")
 
 class ClaudeCodeBackend:
     """AI backend using Claude Code as a subprocess.
+
+    Maintains a persistent conversation across multiple ask() calls.
+    The first call starts a new session with the system prompt,
+    subsequent calls use --continue to stay in the same conversation.
 
     Args:
         working_directory: Directory where Claude Code operates (notes folder).
@@ -32,9 +36,13 @@ class ClaudeCodeBackend:
         self.working_directory = str(working_directory)
         self.system_prompt = system_prompt
         self.timeout = timeout
+        self._session_started = False
 
     def ask(self, user_message: str) -> str:
         """Send a message to Claude Code and get a response.
+
+        The first call starts a new session. Subsequent calls continue
+        the same conversation, preserving context.
 
         Args:
             user_message: The transcribed user command.
@@ -43,12 +51,15 @@ class ClaudeCodeBackend:
             Claude Code's text response.
 
         Raises:
-            RuntimeError: If Claude Code returns a non-zero exit code.
-            TimeoutError: If the command exceeds the timeout.
+            AIBackendError: If Claude Code returns a non-zero exit code or times out.
         """
-        cmd = ["claude", "--print"]
-        if self.system_prompt:
+        cmd = ["claude", "--print", "--dangerously-skip-permissions"]
+
+        if self._session_started:
+            cmd.append("--continue")
+        elif self.system_prompt:
             cmd.extend(["--system-prompt", self.system_prompt])
+
         cmd.append(user_message)
 
         log.info("Asking Claude Code: %s", user_message[:80])
@@ -77,5 +88,6 @@ class ClaudeCodeBackend:
         if not response:
             raise AIBackendError("Claude Code returned an empty response.")
 
+        self._session_started = True
         log.info("Claude Code response: %s", response[:80])
         return response
