@@ -1,4 +1,4 @@
-"""Voice assistant "Computer" - main process.
+"""Voice assistant "Jarvis" - main process.
 
 Main loop: Wake-Word -> Ding -> Record -> STT -> AI -> TTS -> Repeat.
 """

@@ -25,7 +25,7 @@ class AssistantState(Enum):
 
 _STATE_CONFIG = {
     AssistantState.IDLE: ("yellow", "Waiting for wake word..."),
-    AssistantState.LISTENING: ("green", "Listening for 'Computer'..."),
+    AssistantState.LISTENING: ("green", "Listening for 'Hey Jarvis'..."),
     AssistantState.RECORDING: ("bright_green", "Recording speech..."),
     AssistantState.PROCESSING: ("blue", "Processing..."),
     AssistantState.SPEAKING: ("cyan", "Speaking..."),
@@ -41,7 +41,7 @@ class TerminalUI:
         ui = TerminalUI()
         with ui:
             ui.set_state(AssistantState.LISTENING)
-            ui.set_transcription("Hallo Computer")
+            ui.set_transcription("Hey Jarvis, wie wird das Wetter?")
             ui.set_response("Hallo! Wie kann ich helfen?")
     """
 
