@@ -44,7 +44,7 @@ def create_components(config: dict) -> dict:
 
     return {
         "wake_word": WakeWordDetector(
-            model_path=ww_cfg["model_path"],
+            model_path=ww_cfg.get("model_path") or ww_cfg.get("model_name", "hey_jarvis"),
             threshold=ww_cfg.get("threshold", 0.5),
         ),
         "recorder": SpeechRecorder(
@@ -90,7 +90,7 @@ def run_loop(
     tts: OpenAITextToSpeech = components["tts"]
 
     ui.set_state(AssistantState.LISTENING)
-    ui.log("Assistant ready. Say 'Computer' to activate.")
+    ui.log("Assistant ready. Say 'Hey Jarvis' to activate.")
 
     while True:
         # Phase 1: Listen for wake word

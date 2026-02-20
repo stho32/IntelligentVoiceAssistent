@@ -1,6 +1,6 @@
 """Wake-word detection using OpenWakeWord with ONNX inference.
 
-Listens for the keyword "Computer" and signals activation.
+Listens for the keyword "Jarvis" and signals activation.
 """
 
 from pathlib import Path
@@ -15,28 +15,37 @@ log = get_logger("audio.wake_word")
 
 
 class WakeWordDetector:
-    """Detects the wake word "Computer" in audio frames.
+    """Detects the wake word in audio frames.
 
-    Uses OpenWakeWord with a custom ONNX model for detection.
+    Uses OpenWakeWord with built-in or custom ONNX models.
 
     Args:
-        model_path: Path to the .onnx wake-word model file.
+        model_path: Path to a custom .onnx file, OR a built-in model name
+            (e.g., "hey_jarvis", "alexa").
         threshold: Detection threshold (0.0-1.0). Higher = fewer false positives.
     """
 
     def __init__(self, model_path: str | Path, threshold: float = 0.5):
-        self.model_path = str(model_path)
         self.threshold = threshold
-        self._model_name: str | None = None
+        model_str = str(model_path)
+
+        # Determine if this is a file path or a built-in model name
+        is_file = Path(model_str).suffix == ".onnx" and Path(model_str).exists()
+
         try:
             self._model = Model(
-                wakeword_models=[self.model_path],
+                wakeword_models=[model_str],
                 inference_framework="onnx",
             )
         except Exception as e:
             raise WakeWordError(f"Failed to load wake-word model: {e}") from e
-        # Derive model name from filename (e.g. "computer_v2")
-        self._model_name = Path(self.model_path).stem
+
+        # Derive model name for prediction lookup
+        if is_file:
+            self._model_name = Path(model_str).stem
+        else:
+            self._model_name = model_str
+
         log.info("Wake-word detector loaded: %s (threshold=%.2f)", self._model_name, threshold)
 
     def process(self, audio_frame: bytes | np.ndarray) -> bool:

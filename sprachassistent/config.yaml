@@ -1,6 +1,6 @@
 wake_word:
   engine: openwakeword
-  model_path: "models/computer_v2.onnx"
+  model_name: "hey_jarvis"          # built-in model, no download needed
   threshold: 0.5
   inference_framework: onnx
 
