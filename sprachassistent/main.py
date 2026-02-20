@@ -22,6 +22,8 @@ log = get_logger("main")
 _PACKAGE_DIR = Path(__file__).parent
 _SOUNDS_DIR = _PACKAGE_DIR / "audio" / "sounds"
 _DING_PATH = _SOUNDS_DIR / "ding.wav"
+_PROCESSING_PATH = _SOUNDS_DIR / "processing.wav"
+_READY_PATH = _SOUNDS_DIR / "ready.wav"
 
 
 def create_components(config: dict) -> dict:
@@ -120,6 +122,10 @@ def run_loop(
             ui.set_state(AssistantState.LISTENING)
             continue
 
+        # Signal: Recording done, now processing
+        if _PROCESSING_PATH.exists():
+            player.play_wav(_PROCESSING_PATH)
+
         # Phase 3: Transcribe
         ui.set_state(AssistantState.PROCESSING)
         try:
@@ -155,6 +161,10 @@ def run_loop(
             tts.speak(response, pa=player._pa)
         except Exception as e:
             ui.log(f"TTS error: {e}")
+
+        # Signal: Ready for next command
+        if _READY_PATH.exists():
+            player.play_wav(_READY_PATH)
 
         # Back to listening
         ui.set_state(AssistantState.LISTENING)
