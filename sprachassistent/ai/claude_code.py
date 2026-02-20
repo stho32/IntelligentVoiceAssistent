@@ -7,6 +7,11 @@ for non-interactive processing in the context of the notes directory.
 import subprocess
 from pathlib import Path
 
+from sprachassistent.exceptions import AIBackendError
+from sprachassistent.utils.logging import get_logger
+
+log = get_logger("ai.claude_code")
+
 
 class ClaudeCodeBackend:
     """AI backend using Claude Code as a subprocess.
@@ -45,6 +50,8 @@ class ClaudeCodeBackend:
             cmd.extend(["--system-prompt", self.system_prompt])
         cmd.append(user_message)
 
+        log.info("Asking Claude Code: %s", user_message[:80])
+
         try:
             result = subprocess.run(
                 cmd,
@@ -54,15 +61,16 @@ class ClaudeCodeBackend:
                 cwd=self.working_directory,
             )
         except subprocess.TimeoutExpired as e:
-            raise TimeoutError(f"Claude Code did not respond within {self.timeout}s") from e
+            raise AIBackendError(f"Claude Code did not respond within {self.timeout}s") from e
 
         if result.returncode != 0:
-            raise RuntimeError(
+            raise AIBackendError(
                 f"Claude Code exited with code {result.returncode}: {result.stderr.strip()}"
             )
 
         response = result.stdout.strip()
         if not response:
-            raise RuntimeError("Claude Code returned an empty response.")
+            raise AIBackendError("Claude Code returned an empty response.")
 
+        log.info("Claude Code response: %s", response[:80])
         return response

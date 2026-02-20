@@ -8,6 +8,11 @@ from pathlib import Path
 import numpy as np
 from openwakeword.model import Model
 
+from sprachassistent.exceptions import WakeWordError
+from sprachassistent.utils.logging import get_logger
+
+log = get_logger("audio.wake_word")
+
 
 class WakeWordDetector:
     """Detects the wake word "Computer" in audio frames.
@@ -23,12 +28,16 @@ class WakeWordDetector:
         self.model_path = str(model_path)
         self.threshold = threshold
         self._model_name: str | None = None
-        self._model = Model(
-            wakeword_models=[self.model_path],
-            inference_framework="onnx",
-        )
+        try:
+            self._model = Model(
+                wakeword_models=[self.model_path],
+                inference_framework="onnx",
+            )
+        except Exception as e:
+            raise WakeWordError(f"Failed to load wake-word model: {e}") from e
         # Derive model name from filename (e.g. "computer_v2")
         self._model_name = Path(self.model_path).stem
+        log.info("Wake-word detector loaded: %s (threshold=%.2f)", self._model_name, threshold)
 
     def process(self, audio_frame: bytes | np.ndarray) -> bool:
         """Process one audio frame and check for wake word.

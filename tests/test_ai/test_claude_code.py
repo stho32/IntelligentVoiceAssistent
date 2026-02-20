@@ -6,6 +6,7 @@ from unittest.mock import patch
 import pytest
 
 from sprachassistent.ai.claude_code import ClaudeCodeBackend
+from sprachassistent.exceptions import AIBackendError
 
 
 @pytest.fixture()
@@ -56,7 +57,7 @@ def test_ask_passes_correct_command(mock_run, backend):
 def test_ask_nonzero_exit_raises(mock_run, backend):
     """Non-zero exit code raises RuntimeError."""
     mock_run.return_value = _make_result(returncode=1, stderr="Error occurred")
-    with pytest.raises(RuntimeError, match="exited with code 1"):
+    with pytest.raises(AIBackendError, match="exited with code 1"):
         backend.ask("Bad command")
 
 
@@ -64,7 +65,7 @@ def test_ask_nonzero_exit_raises(mock_run, backend):
 def test_ask_empty_response_raises(mock_run, backend):
     """Empty stdout raises RuntimeError."""
     mock_run.return_value = _make_result(stdout="")
-    with pytest.raises(RuntimeError, match="empty response"):
+    with pytest.raises(AIBackendError, match="empty response"):
         backend.ask("Silent command")
 
 
@@ -72,7 +73,7 @@ def test_ask_empty_response_raises(mock_run, backend):
 def test_ask_timeout_raises(mock_run, backend):
     """subprocess.TimeoutExpired is converted to TimeoutError."""
     mock_run.side_effect = subprocess.TimeoutExpired(cmd="claude", timeout=30)
-    with pytest.raises(TimeoutError, match="did not respond"):
+    with pytest.raises(AIBackendError, match="did not respond"):
         backend.ask("Slow command")
 
 

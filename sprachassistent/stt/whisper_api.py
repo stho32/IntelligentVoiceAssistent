@@ -8,6 +8,11 @@ import wave
 
 from openai import OpenAI
 
+from sprachassistent.exceptions import TranscriptionError
+from sprachassistent.utils.logging import get_logger
+
+log = get_logger("stt.whisper")
+
 
 class WhisperTranscriber:
     """Transcribes audio using the OpenAI Whisper API.
@@ -54,13 +59,21 @@ class WhisperTranscriber:
         if not audio_data:
             raise ValueError("No audio data to transcribe.")
 
+        duration = len(audio_data) / (sample_rate * sample_width * channels)
+        log.info("Transcribing %.1fs of audio...", duration)
+
         wav_buffer = _pcm_to_wav(audio_data, sample_rate, channels, sample_width)
 
-        result = self._client.audio.transcriptions.create(
-            model=self.model,
-            file=wav_buffer,
-            language=self.language,
-        )
+        try:
+            result = self._client.audio.transcriptions.create(
+                model=self.model,
+                file=wav_buffer,
+                language=self.language,
+            )
+        except Exception as e:
+            raise TranscriptionError(f"Whisper API error: {e}") from e
+
+        log.info("Transcription: %s", result.text)
         return result.text
 
 

@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
+from sprachassistent.exceptions import TranscriptionError
 from sprachassistent.stt.whisper_api import WhisperTranscriber, _pcm_to_wav
 
 
@@ -73,5 +74,5 @@ def test_transcribe_api_error(mock_openai):
     transcriber = WhisperTranscriber(client=mock_openai)
     pcm = np.zeros(16000, dtype=np.int16).tobytes()
 
-    with pytest.raises(RuntimeError, match="API error"):
+    with pytest.raises(TranscriptionError, match="API error"):
         transcriber.transcribe(pcm)

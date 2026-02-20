@@ -6,6 +6,11 @@ system default microphone.
 
 import pyaudio
 
+from sprachassistent.exceptions import AudioError
+from sprachassistent.utils.logging import get_logger
+
+log = get_logger("audio.microphone")
+
 
 class MicrophoneStream:
     """Microphone input stream using PyAudio.
@@ -31,14 +36,19 @@ class MicrophoneStream:
         self._stream: pyaudio.Stream | None = None
 
     def __enter__(self) -> "MicrophoneStream":
-        self._pa = pyaudio.PyAudio()
-        self._stream = self._pa.open(
-            format=self.audio_format,
-            channels=self.channels,
-            rate=self.rate,
-            input=True,
-            frames_per_buffer=self.chunk_size,
-        )
+        try:
+            self._pa = pyaudio.PyAudio()
+            self._stream = self._pa.open(
+                format=self.audio_format,
+                channels=self.channels,
+                rate=self.rate,
+                input=True,
+                frames_per_buffer=self.chunk_size,
+            )
+        except Exception as e:
+            self.close()
+            raise AudioError(f"Failed to open microphone: {e}") from e
+        log.info("Microphone stream opened (rate=%d, chunk=%d)", self.rate, self.chunk_size)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:

@@ -3,6 +3,7 @@
 Main loop: Wake-Word -> Ding -> Record -> STT -> AI -> TTS -> Repeat.
 """
 
+import logging
 from pathlib import Path
 
 from sprachassistent.ai.claude_code import ClaudeCodeBackend
@@ -13,7 +14,10 @@ from sprachassistent.audio.wake_word import WakeWordDetector
 from sprachassistent.config import get_config
 from sprachassistent.stt.whisper_api import WhisperTranscriber
 from sprachassistent.tts.openai_tts import OpenAITextToSpeech
+from sprachassistent.utils.logging import get_logger, setup_logging
 from sprachassistent.utils.terminal_ui import AssistantState, TerminalUI
+
+log = get_logger("main")
 
 _PACKAGE_DIR = Path(__file__).parent
 _SOUNDS_DIR = _PACKAGE_DIR / "audio" / "sounds"
@@ -158,10 +162,21 @@ def run_loop(
 
 def main() -> None:
     """Start the voice assistant."""
-    config = get_config()
+    setup_logging(level=logging.INFO)
+
+    try:
+        config = get_config()
+    except Exception as e:
+        log.error("Failed to load config: %s", e)
+        raise SystemExit(1) from e
+
     audio_cfg = config["audio"]
 
-    components = create_components(config)
+    try:
+        components = create_components(config)
+    except Exception as e:
+        log.error("Failed to initialize components: %s", e)
+        raise SystemExit(1) from e
 
     with (
         MicrophoneStream(
