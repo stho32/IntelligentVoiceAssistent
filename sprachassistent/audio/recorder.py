@@ -1,13 +1,12 @@
 """Speech recording with Voice Activity Detection (VAD).
 
 Records audio after wake-word activation until silence is detected,
-using silero-vad-lite for speech/silence classification.
+using silero-vad for speech/silence classification.
 """
 
-import array
-
 import numpy as np
-from silero_vad_lite import SileroVAD
+import torch
+from silero_vad import load_silero_vad
 
 
 class SpeechRecorder:
@@ -37,7 +36,7 @@ class SpeechRecorder:
         self.silence_duration_sec = silence_duration_sec
         self.max_duration_sec = max_duration_sec
 
-        self._vad = SileroVAD(sample_rate)
+        self._vad = load_silero_vad()
         self._audio_buffer: list[bytes] = []
         self._silence_frames = 0
         self._total_frames = 0
@@ -61,7 +60,7 @@ class SpeechRecorder:
         self._silence_frames = 0
         self._total_frames = 0
         self._recording = True
-        self._vad = SileroVAD(self.sample_rate)
+        self._vad.reset_states()
 
     def process_chunk(self, audio_chunk: bytes) -> bool:
         """Process an audio chunk and check if recording should continue.
@@ -88,8 +87,8 @@ class SpeechRecorder:
         offset = 0
         while offset + self.VAD_FRAME_SIZE <= len(float32_array):
             frame = float32_array[offset : offset + self.VAD_FRAME_SIZE]
-            vad_data = array.array("f", frame.tobytes())
-            speech_prob = self._vad.process(vad_data)
+            frame_tensor = torch.from_numpy(frame)
+            speech_prob = self._vad(frame_tensor, self.sample_rate).item()
 
             if speech_prob >= self.vad_threshold:
                 self._silence_frames = 0

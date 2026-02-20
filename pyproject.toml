@@ -10,7 +10,8 @@ dependencies = [
     "rich>=13.0",
     "pyyaml>=6.0",
     "onnxruntime>=1.17",
-    "silero-vad-lite>=0.2",
+    "silero-vad>=1.0",
+    "torch>=2.0",
     # openwakeword deps (installed via --no-deps to skip tflite-runtime on Python 3.13)
     "scipy>=1.10",
     "scikit-learn>=1.3",

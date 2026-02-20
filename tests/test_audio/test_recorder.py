@@ -1,23 +1,24 @@
-"""Tests for SpeechRecorder with VAD (silero-vad-lite mocked)."""
+"""Tests for SpeechRecorder with VAD (silero-vad mocked)."""
 
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
+import torch
 
 from sprachassistent.audio.recorder import SpeechRecorder
 
 
 @pytest.fixture()
 def mock_vad():
-    """Mock silero-vad-lite SileroVAD."""
-    with patch("sprachassistent.audio.recorder.SileroVAD") as mock_cls:
-        mock_instance = MagicMock()
-        mock_instance.window_size_samples = 512
-        # Default: all speech
-        mock_instance.process.return_value = 0.9
-        mock_cls.return_value = mock_instance
-        yield mock_instance
+    """Mock silero-vad model loaded via load_silero_vad."""
+    with patch("sprachassistent.audio.recorder.load_silero_vad") as mock_load:
+        mock_model = MagicMock()
+        # Default: all speech (returns tensor-like with .item())
+        mock_model.return_value = torch.tensor(0.9)
+        mock_model.reset_states = MagicMock()
+        mock_load.return_value = mock_model
+        yield mock_model
 
 
 def _make_chunk(n_samples: int = 1280) -> bytes:
@@ -31,6 +32,7 @@ def test_start_resets_state(mock_vad):
     recorder.start()
     assert recorder.is_recording is True
     assert recorder.get_audio() == b""
+    mock_vad.reset_states.assert_called()
 
 
 def test_process_chunk_accumulates_audio(mock_vad):
@@ -50,7 +52,7 @@ def test_silence_detection_stops_recording(mock_vad):
     recorder.start()
 
     # Return silence probability
-    mock_vad.process.return_value = 0.1
+    mock_vad.return_value = torch.tensor(0.1)
 
     chunk = _make_chunk(1280)
     # Feed enough chunks to accumulate silence
@@ -68,7 +70,7 @@ def test_max_duration_stops_recording(mock_vad):
     recorder.start()
 
     # All speech (no silence)
-    mock_vad.process.return_value = 0.9
+    mock_vad.return_value = torch.tensor(0.9)
 
     chunk = _make_chunk(1280)
     for _ in range(50):
@@ -94,5 +96,7 @@ def test_float32_conversion(mock_vad):
     chunk = np.full(512, 32767, dtype=np.int16).tobytes()
     recorder.process_chunk(chunk)
 
-    # VAD should have been called with float data
-    mock_vad.process.assert_called()
+    # VAD model should have been called with a tensor
+    mock_vad.assert_called()
+    call_args = mock_vad.call_args[0]
+    assert isinstance(call_args[0], torch.Tensor)
