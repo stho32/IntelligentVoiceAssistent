@@ -63,6 +63,8 @@ class WakeWordDetector:
 
         predictions = self._model.predict(audio_frame)
         score = predictions.get(self._model_name, 0.0)
+        if score > 0.05:
+            log.debug("Wake word score: %.3f (keys: %s)", score, list(predictions.keys()))
         return score >= self.threshold
 
     def reset(self) -> None:

@@ -1,53 +1,71 @@
-# CLAUDE.md - Projektrichtlinien fuer Claude Code
+# CLAUDE.md
 
-## Projekt
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Lokaler Sprachassistent "Computer" - aktiviert per Wake-Word, versteht natuerliche Sprache
-und fuehrt Aufgaben ueber Claude Code im Terminal aus.
+## Project
 
-## Umgebung
+Local voice assistant "Jarvis" - activated by wake word "Hey Jarvis", understands natural language,
+and executes tasks via Claude Code subprocess against a notes folder (`~/Projekte/Training2`).
+
+## Environment
 
 - Ubuntu 25.04, Python 3.13, Intel NUC, Poly BT700 Headset, PipeWire Audio
+- API keys required: `OPENAI_API_KEY` (Whisper STT + TTS), Anthropic key (via Claude Code)
+- Node.js required for Claude Code subprocess
 
-## Verzeichnisstruktur
+## Commands
 
-- `sprachassistent/` - Hauptpaket (Python)
-- `ai-docs/` - API-Referenzdokumentation fuer alle Bibliotheken
-- `models/` - ONNX-Modelle (nicht im Git)
-- `scripts/` - Hilfsskripte (Download, Generierung)
-- `tests/` - Unit- und Integrationstests
-- `Requirements/` - Anforderungsdokumente
-
-## Technologie-Stack
-
-- Python 3.12+ mit uv als Paketmanager
-- OpenWakeWord mit ONNX-Inference (Wake-Word "Computer")
-- silero-vad-lite (Voice Activity Detection, kein PyTorch)
-- OpenAI Whisper API (STT)
-- Claude Code Subprocess `--print` (KI-Backend)
-- OpenAI TTS tts-1 mit PCM-Streaming (Text-zu-Sprache)
-- PyAudio (Audio I/O)
-- Rich (Terminal-UI)
-
-## Kommandos
-
-- `uv run pytest` - Tests ausfuehren
+- `uv run sprachassistent` - Start the voice assistant
+- `uv run pytest` - Run all tests
+- `uv run pytest tests/test_audio/test_recorder.py` - Run a single test file
+- `uv run pytest -k test_ask_first_call` - Run a single test by name
 - `uv run ruff check .` - Linting
-- `uv run ruff format --check .` - Formatierung pruefen
-- `uv run sprachassistent` - Assistent starten
+- `uv run ruff format --check .` - Check formatting
+- `uv run ruff format .` - Auto-format
+
+## Architecture
+
+The assistant runs a synchronous main loop in `sprachassistent/main.py`:
+
+```
+Wake Word Detection -> Ding Sound -> Record Speech -> STT (Whisper API) -> AI (Claude Code) -> TTS (OpenAI) -> Ready Sound -> Repeat
+```
+
+### Key modules
+
+- `audio/wake_word.py` - OpenWakeWord ONNX model, processes 80ms frames (1280 samples at 16kHz)
+- `audio/recorder.py` - VAD-based recording using silero-vad (PyTorch), 512-sample frames, stops on silence
+- `audio/microphone.py` - PyAudio input stream context manager
+- `audio/player.py` - PyAudio output: WAV playback and PCM streaming
+- `stt/whisper_api.py` - Converts raw PCM to WAV in-memory, sends to OpenAI Whisper API
+- `ai/claude_code.py` - Subprocess wrapper: first call uses `--system-prompt`, subsequent calls use `--continue` for persistent conversation. Strips `CLAUDECODE` env var to allow nesting.
+- `tts/openai_tts.py` - Streams PCM from OpenAI TTS at 24kHz for low-latency playback
+- `utils/terminal_ui.py` - Rich Live display with state machine (IDLE/LISTENING/RECORDING/PROCESSING/SPEAKING/ERROR)
+- `config.py` - Loads `sprachassistent/config.yaml`, expands `~` in path values
+- `exceptions.py` - Exception hierarchy rooted at `AssistantError`
+
+### Audio format conventions
+
+- Microphone input: 16kHz, 16-bit int16, mono PCM
+- TTS output: 24kHz, 16-bit int16, mono PCM
+- Wake word expects 80ms chunks (1280 samples), VAD expects 32ms frames (512 samples)
+
+### Configuration
+
+All settings live in `sprachassistent/config.yaml`. The system prompt for the AI persona is in `sprachassistent/ai/prompts/system.md`.
+
+### openwakeword installation note
+
+openwakeword is installed with `--no-deps` because `tflite-runtime` is unavailable for Python 3.13. ONNX inference framework is used instead.
 
 ## Tests
 
-**Wichtig:** Bei jedem Entwicklungsschritt muessen Tests erstellt und ausgefuehrt werden.
+- Tests mirror the source structure: `tests/test_audio/`, `tests/test_stt/`, `tests/test_ai/`, etc.
+- All external APIs and hardware (PyAudio, OpenAI, Claude Code subprocess) must be mocked.
+- Every new feature or change requires corresponding tests.
 
-- Fuer jede neue Funktion oder Aenderung muessen passende Unit-Tests geschrieben werden.
-- Tests befinden sich im Verzeichnis `tests/` und spiegeln die Struktur von `sprachassistent/` wider.
-- Vor jedem Commit muessen alle Tests erfolgreich durchlaufen.
-- Testframework: `pytest`
-- Externe APIs und Hardware (PyAudio, OpenAI, etc.) werden in Tests gemockt.
+## Language
 
-## Sprache
-
-- Code und Kommentare: Englisch
-- Anforderungen und Dokumentation: Deutsch
-- Keine Umlaute in Dateinamen oder Code-Bezeichnern
+- Code and comments: English
+- Requirements and documentation: German
+- No umlauts in filenames or identifiers

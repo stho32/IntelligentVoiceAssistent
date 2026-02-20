@@ -172,7 +172,7 @@ def run_loop(
 
 def main() -> None:
     """Start the voice assistant."""
-    setup_logging(level=logging.INFO)
+    setup_logging(level=logging.DEBUG)
 
     try:
         config = get_config()
