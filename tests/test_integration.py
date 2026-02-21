@@ -110,7 +110,7 @@ def test_pipeline_empty_transcription_skips_ai():
 
 
 def test_pipeline_ai_error_recovers():
-    """AI errors don't crash the pipeline."""
+    """AI errors don't crash the pipeline and error is spoken."""
     components = _make_mock_components()
     mic = MagicMock()
     player = MagicMock()
@@ -133,5 +133,23 @@ def test_pipeline_ai_error_recovers():
     with pytest.raises(KeyboardInterrupt):
         run_loop(components, mic, player, ui)
 
-    # TTS should not be called since AI failed
-    components["tts"].speak.assert_not_called()
+    # TTS should be called with error message (not with AI response)
+    components["tts"].speak.assert_called_once()
+    spoken_text = components["tts"].speak.call_args[0][0]
+    assert "Fehler aufgetreten" in spoken_text
+
+
+def test_error_wav_exists():
+    """The error.wav notification sound file must exist."""
+    error_path = SOUNDS_DIR / "error.wav"
+    assert error_path.exists(), "error.wav not found - run scripts/generate_error_sound.py"
+
+
+def test_error_wav_is_valid():
+    """error.wav is a valid WAV file with correct format."""
+    error_path = SOUNDS_DIR / "error.wav"
+    with wave.open(str(error_path), "rb") as wf:
+        assert wf.getnchannels() == 1
+        assert wf.getsampwidth() == 2
+        assert wf.getframerate() == 16000
+        assert wf.getnframes() > 0

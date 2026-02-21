@@ -4,6 +4,7 @@ Main loop: Wake-Word -> Ding -> Record -> STT -> AI -> TTS -> Repeat.
 """
 
 import logging
+import subprocess
 import threading
 from pathlib import Path
 
@@ -26,6 +27,14 @@ _DING_PATH = _SOUNDS_DIR / "ding.wav"
 _PROCESSING_PATH = _SOUNDS_DIR / "processing.wav"
 _READY_PATH = _SOUNDS_DIR / "ready.wav"
 _THINKING_PATH = _SOUNDS_DIR / "thinking.wav"
+_ERROR_SOUND_PATH = _SOUNDS_DIR / "error.wav"
+
+# Spoken error messages (German, matching language: de config)
+_ERROR_MESSAGES = {
+    "stt": "Entschuldigung, ich konnte dich nicht verstehen. Bitte versuche es nochmal.",
+    "ai_timeout": "Die Verarbeitung hat zu lange gedauert. Bitte versuche es nochmal.",
+    "ai_general": "Entschuldigung, bei der Verarbeitung ist ein Fehler aufgetreten.",
+}
 
 
 def create_components(config: dict) -> dict:
@@ -84,6 +93,29 @@ def _thinking_beep_loop(
         if _THINKING_PATH.exists():
             try:
                 player.play_wav(_THINKING_PATH)
+            except Exception:
+                pass
+
+
+def _speak_error(
+    tts: OpenAITextToSpeech,
+    player: AudioPlayer,
+    error_key: str,
+    ui: TerminalUI,
+) -> None:
+    """Speak an error message to the user, with sound fallback.
+
+    If TTS fails (because TTS itself is the problem), falls back to
+    playing an error sound file.
+    """
+    message = _ERROR_MESSAGES.get(error_key, _ERROR_MESSAGES["ai_general"])
+    try:
+        tts.speak(message, pa=player._pa)
+    except Exception as tts_err:
+        ui.log(f"Error TTS also failed: {tts_err}")
+        if _ERROR_SOUND_PATH.exists():
+            try:
+                player.play_wav(_ERROR_SOUND_PATH)
             except Exception:
                 pass
 
@@ -151,6 +183,9 @@ def run_loop(
         except Exception as e:
             ui.set_state(AssistantState.ERROR)
             ui.log(f"STT error: {e}")
+            _speak_error(tts, player, "stt", ui)
+            if _READY_PATH.exists():
+                player.play_wav(_READY_PATH)
             ui.set_state(AssistantState.LISTENING)
             continue
 
@@ -172,8 +207,16 @@ def run_loop(
         try:
             response = ai_backend.ask(text)
         except Exception as e:
+            stop_beep.set()
+            beep_thread.join(timeout=1)
             ui.set_state(AssistantState.ERROR)
             ui.log(f"AI error: {e}")
+            if isinstance(e.__cause__, subprocess.TimeoutExpired):
+                _speak_error(tts, player, "ai_timeout", ui)
+            else:
+                _speak_error(tts, player, "ai_general", ui)
+            if _READY_PATH.exists():
+                player.play_wav(_READY_PATH)
             ui.set_state(AssistantState.LISTENING)
             continue
         finally:
@@ -189,6 +232,11 @@ def run_loop(
             tts.speak(response, pa=player._pa)
         except Exception as e:
             ui.log(f"TTS error: {e}")
+            if _ERROR_SOUND_PATH.exists():
+                try:
+                    player.play_wav(_ERROR_SOUND_PATH)
+                except Exception:
+                    pass
 
         # Signal: Ready for next command
         if _READY_PATH.exists():
