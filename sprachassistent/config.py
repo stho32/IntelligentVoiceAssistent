@@ -49,6 +49,7 @@ def _expand_paths(config: dict) -> None:
     """Expand ~ and environment variables in path-like config values."""
     path_keys = {
         ("ai", "working_directory"),
+        ("ai", "source_directory"),
         ("wake_word", "model_path"),
         ("ai", "system_prompt_path"),
     }

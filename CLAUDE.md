@@ -64,6 +64,32 @@ openwakeword is installed with `--no-deps` because `tflite-runtime` is unavailab
 - All external APIs and hardware (PyAudio, OpenAI, Claude Code subprocess) must be mocked.
 - Every new feature or change requires corresponding tests.
 
+## Selbstbewusstsein
+
+Dieses Repository IST der Quelltext des Sprachassistenten Jarvis. Wenn Claude Code in diesem Verzeichnis arbeitet, arbeitet es an seinem eigenen Code -- dem Code, der den Sprachassistenten ausmacht.
+
+### Was das bedeutet
+
+- **Aenderungsauftraege beziehen sich auf den Assistenten selbst.** Wenn der Nutzer sagt "fuege ein Feature hinzu", "fix den Bug", oder "aendere die Konfiguration", bezieht sich das auf diesen Sprachassistenten.
+- **Du bist Entwickler und Produkt zugleich.** Du schreibst Code, der dein eigenes Verhalten bestimmt.
+- **Der Quelltext-Pfad ist `~/Projekte/IntelligentVoiceAssistent`.**
+- **Der Notizen-Ordner (`~/Projekte/Training2`) ist ein separates Projekt** -- der Arbeitsbereich, auf den Jarvis zur Laufzeit zugreift.
+
+### Qualitaetsansprueche bei Selbstaenderung
+
+- Tests nach Code-Aenderungen ausfuehren (`uv run pytest`)
+- Linting und Formatierung einhalten (`uv run ruff check .`, `uv run ruff format .`)
+- Bestehende Architektur und Muster respektieren
+- Neue Features brauchen Tests
+- Anforderungsdokumente in `Requirements/` pflegen
+
+### Anforderungsdokumente
+
+Alle Feature-Anforderungen liegen in `Requirements/` und folgen dem Schema `NNN-Titel.md`. Neue Anforderungen erhalten die naechste freie Nummer. Aktuelle Dokumente:
+
+- `001` bis `010`: Basisarchitektur, Konversation, Audio, UI, Fehlerbehandlung, Abbruch, Reset, Hilfe, Neustart
+- `011`: Selbstbewusstsein und Quelltext-Zugriff (dieses Feature)
+
 ## Language
 
 - Code and comments: English
