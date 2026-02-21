@@ -4,6 +4,7 @@ Main loop: Wake-Word -> Ding -> Record -> STT -> AI -> TTS -> Repeat.
 """
 
 import logging
+import threading
 from pathlib import Path
 
 from sprachassistent.ai.claude_code import ClaudeCodeBackend
@@ -24,6 +25,7 @@ _SOUNDS_DIR = _PACKAGE_DIR / "audio" / "sounds"
 _DING_PATH = _SOUNDS_DIR / "ding.wav"
 _PROCESSING_PATH = _SOUNDS_DIR / "processing.wav"
 _READY_PATH = _SOUNDS_DIR / "ready.wav"
+_THINKING_PATH = _SOUNDS_DIR / "thinking.wav"
 
 
 def create_components(config: dict) -> dict:
@@ -62,6 +64,7 @@ def create_components(config: dict) -> dict:
         "ai_backend": ClaudeCodeBackend(
             working_directory=ai_cfg["working_directory"],
             system_prompt=system_prompt,
+            timeout=ai_cfg.get("timeout", 300),
         ),
         "tts": OpenAITextToSpeech(
             model=tts_cfg["model"],
@@ -71,11 +74,26 @@ def create_components(config: dict) -> dict:
     }
 
 
+def _thinking_beep_loop(
+    player: AudioPlayer,
+    stop_event: threading.Event,
+    interval: float,
+) -> None:
+    """Play a periodic beep while the AI is thinking."""
+    while not stop_event.wait(timeout=interval):
+        if _THINKING_PATH.exists():
+            try:
+                player.play_wav(_THINKING_PATH)
+            except Exception:
+                pass
+
+
 def run_loop(
     components: dict,
     mic: MicrophoneStream,
     player: AudioPlayer,
     ui: TerminalUI,
+    thinking_beep_interval: float = 3,
 ) -> None:
     """Run the main assistant loop.
 
@@ -143,7 +161,14 @@ def run_loop(
         ui.set_transcription(text)
         ui.log(f"Transcription: {text}")
 
-        # Phase 4: Get AI response
+        # Phase 4: Get AI response (with periodic beep)
+        stop_beep = threading.Event()
+        beep_thread = threading.Thread(
+            target=_thinking_beep_loop,
+            args=(player, stop_beep, thinking_beep_interval),
+            daemon=True,
+        )
+        beep_thread.start()
         try:
             response = ai_backend.ask(text)
         except Exception as e:
@@ -151,6 +176,9 @@ def run_loop(
             ui.log(f"AI error: {e}")
             ui.set_state(AssistantState.LISTENING)
             continue
+        finally:
+            stop_beep.set()
+            beep_thread.join(timeout=1)
 
         ui.set_response(response)
         ui.log(f"Response: {response}")
@@ -198,7 +226,8 @@ def main() -> None:
         TerminalUI() as ui,
     ):
         try:
-            run_loop(components, mic, player, ui)
+            beep_interval = config["ai"].get("thinking_beep_interval", 3)
+            run_loop(components, mic, player, ui, thinking_beep_interval=beep_interval)
         except KeyboardInterrupt:
             ui.log("Shutting down...")
 

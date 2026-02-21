@@ -13,6 +13,8 @@ ai:
   backend: claude-code
   working_directory: "~/Projekte/Training2"
   system_prompt_path: "ai/prompts/system.md"
+  timeout: 300                       # seconds to wait for AI response
+  thinking_beep_interval: 3          # seconds between beeps while AI is thinking
 
 tts:
   provider: openai
