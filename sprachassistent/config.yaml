@@ -33,6 +33,10 @@ commands:
     - "reset"
     - "vergiss alles"
     - "von vorne"
+  restart_keywords:
+    - "neustart"
+    - "starte neu"
+    - "jarvis neustart"
 
 audio:
   sample_rate: 16000

@@ -4,7 +4,9 @@ Main loop: Wake-Word -> Ding -> Record -> STT -> AI -> TTS -> Repeat.
 """
 
 import logging
+import os
 import subprocess
+import sys
 import threading
 from pathlib import Path
 
@@ -97,6 +99,16 @@ def _thinking_beep_loop(
                 pass
 
 
+class _RestartRequested(Exception):
+    """Raised when the user requests a restart via voice command."""
+
+
+def _restart_assistant() -> None:
+    """Restart the assistant process by replacing it with a fresh instance."""
+    log.info("Restarting assistant process via os.execv...")
+    os.execv(sys.executable, [sys.executable] + sys.argv)
+
+
 def _is_cancel_command(text: str, cancel_keywords: list[str]) -> bool:
     """Check if transcribed text is a cancel command."""
     normalized = text.strip().lower()
@@ -134,6 +146,7 @@ def run_loop(
     thinking_beep_interval: float = 3,
     cancel_keywords: list[str] | None = None,
     reset_keywords: list[str] | None = None,
+    restart_keywords: list[str] | None = None,
 ) -> None:
     """Run the main assistant loop.
 
@@ -145,11 +158,14 @@ def run_loop(
         thinking_beep_interval: Seconds between beeps while AI is thinking.
         cancel_keywords: List of keywords that cancel the current command.
         reset_keywords: List of keywords that reset the conversation session.
+        restart_keywords: List of keywords that restart the assistant process.
     """
     if cancel_keywords is None:
         cancel_keywords = []
     if reset_keywords is None:
         reset_keywords = []
+    if restart_keywords is None:
+        restart_keywords = []
     wake_word: WakeWordDetector = components["wake_word"]
     recorder: SpeechRecorder = components["recorder"]
     transcriber: WhisperTranscriber = components["transcriber"]
@@ -238,6 +254,18 @@ def run_loop(
                 player.play_wav(_READY_PATH)
             ui.set_state(AssistantState.LISTENING)
             continue
+
+        # Check for restart command
+        if restart_keywords and _is_cancel_command(text, restart_keywords):
+            ui.log("Restart requested by user.")
+            try:
+                tts.speak(
+                    "Alles klar, ich starte jetzt neu.",
+                    pa=player._pa,
+                )
+            except Exception:
+                pass
+            raise _RestartRequested
 
         # Phase 4: Get AI response (with periodic beep + cancel support)
         stop_beep = threading.Event()
@@ -375,6 +403,7 @@ def main() -> None:
             commands_cfg = config.get("commands", {})
             cancel_kw = commands_cfg.get("cancel_keywords", [])
             reset_kw = commands_cfg.get("reset_keywords", [])
+            restart_kw = commands_cfg.get("restart_keywords", [])
             run_loop(
                 components,
                 mic,
@@ -383,9 +412,14 @@ def main() -> None:
                 thinking_beep_interval=beep_interval,
                 cancel_keywords=cancel_kw,
                 reset_keywords=reset_kw,
+                restart_keywords=restart_kw,
             )
         except KeyboardInterrupt:
             ui.log("Shutting down...")
+        except _RestartRequested:
+            ui.log("Restarting...")
+            # Resources are cleaned up by the with-block exiting
+            _restart_assistant()
 
 
 if __name__ == "__main__":

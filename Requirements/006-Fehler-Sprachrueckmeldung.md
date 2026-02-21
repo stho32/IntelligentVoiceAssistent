@@ -149,4 +149,4 @@ except Exception as e:
 
 ## 8. Status
 
-- [ ] Offen
+- [x] Implementiert (2026-02-21)

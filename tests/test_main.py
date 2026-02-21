@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from sprachassistent.exceptions import AIBackendError
-from sprachassistent.main import create_components, run_loop
+from sprachassistent.main import _RestartRequested, create_components, run_loop
 from sprachassistent.utils.terminal_ui import AssistantState
 
 
@@ -484,6 +484,140 @@ def test_reset_before_cancel_priority():
     # Cancel takes priority - reset should NOT be called
     components["ai_backend"].reset_session.assert_not_called()
     components["ai_backend"].ask.assert_not_called()
+
+
+def test_restart_command_raises_restart_requested():
+    """Restart keyword causes _RestartRequested to be raised."""
+    components = _make_mock_components()
+    mic = MagicMock()
+    player = MagicMock()
+    ui = MagicMock()
+
+    call_count = 0
+
+    def wake_word_side_effect(chunk):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return True
+        raise KeyboardInterrupt
+
+    components["wake_word"].process.side_effect = wake_word_side_effect
+    components["recorder"].process_chunk.return_value = False
+    components["recorder"].get_audio.return_value = b"\x00" * 3200
+    components["transcriber"].transcribe.return_value = "Starte neu"
+
+    with pytest.raises(_RestartRequested):
+        run_loop(
+            components,
+            mic,
+            player,
+            ui,
+            restart_keywords=["neustart", "starte neu"],
+        )
+
+    # AI should not be called
+    components["ai_backend"].ask.assert_not_called()
+    # TTS should speak confirmation
+    components["tts"].speak.assert_called_once()
+    spoken_text = components["tts"].speak.call_args[0][0]
+    assert "starte jetzt neu" in spoken_text
+
+
+def test_restart_priority_after_cancel_and_reset():
+    """Restart is checked after cancel and reset (lowest priority)."""
+    components = _make_mock_components()
+    mic = MagicMock()
+    player = MagicMock()
+    ui = MagicMock()
+
+    call_count = 0
+
+    def wake_word_side_effect(chunk):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return True
+        raise KeyboardInterrupt
+
+    components["wake_word"].process.side_effect = wake_word_side_effect
+    components["recorder"].process_chunk.return_value = False
+    components["recorder"].get_audio.return_value = b"\x00" * 3200
+    # "stopp" matches cancel, should NOT reach restart
+    components["transcriber"].transcribe.return_value = "Stopp"
+
+    with pytest.raises(KeyboardInterrupt):
+        run_loop(
+            components,
+            mic,
+            player,
+            ui,
+            cancel_keywords=["stopp"],
+            reset_keywords=["reset"],
+            restart_keywords=["neustart"],
+        )
+
+    # Cancel takes priority - AI and reset should NOT be called
+    components["ai_backend"].ask.assert_not_called()
+    components["ai_backend"].reset_session.assert_not_called()
+
+
+def test_restart_tts_failure_still_raises():
+    """Even if TTS fails, restart is still triggered."""
+    components = _make_mock_components()
+    mic = MagicMock()
+    player = MagicMock()
+    ui = MagicMock()
+
+    call_count = 0
+
+    def wake_word_side_effect(chunk):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return True
+        raise KeyboardInterrupt
+
+    components["wake_word"].process.side_effect = wake_word_side_effect
+    components["recorder"].process_chunk.return_value = False
+    components["recorder"].get_audio.return_value = b"\x00" * 3200
+    components["transcriber"].transcribe.return_value = "Neustart"
+    components["tts"].speak.side_effect = RuntimeError("TTS down")
+
+    with pytest.raises(_RestartRequested):
+        run_loop(
+            components,
+            mic,
+            player,
+            ui,
+            restart_keywords=["neustart"],
+        )
+
+
+@patch("sprachassistent.main._restart_assistant")
+def test_main_handles_restart_requested(mock_restart):
+    """main() catches _RestartRequested and calls _restart_assistant."""
+    with (
+        patch("sprachassistent.main.setup_logging"),
+        patch("sprachassistent.main.get_config") as mock_cfg,
+        patch("sprachassistent.main.create_components"),
+        patch("sprachassistent.main.MicrophoneStream"),
+        patch("sprachassistent.main.AudioPlayer"),
+        patch("sprachassistent.main.TerminalUI"),
+        patch("sprachassistent.main.run_loop") as mock_run_loop,
+    ):
+        mock_cfg.return_value = {
+            "audio": {"sample_rate": 16000, "channels": 1, "chunk_size": 1280},
+            "ai": {"thinking_beep_interval": 3},
+            "commands": {},
+        }
+        mock_run_loop.side_effect = _RestartRequested
+
+        from sprachassistent.main import main
+
+        main()
+
+        mock_restart.assert_called_once()
 
 
 @patch("sprachassistent.main.WakeWordDetector")

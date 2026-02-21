@@ -87,4 +87,4 @@ Die Formulierung ist natuerlich und instruktiv, damit der Assistent die Informat
 
 ## 7. Status
 
-- [ ] Offen
+- [x] Implementiert (2026-02-21)

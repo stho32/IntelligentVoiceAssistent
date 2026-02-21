@@ -170,4 +170,4 @@ Der Abbruch waehrend der KI-Verarbeitung (Phase PROCESSING) ist deutlich komplex
 
 ## 10. Status
 
-- [ ] Offen
+- [x] Implementiert (2026-02-21)

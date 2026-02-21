@@ -179,4 +179,4 @@ Transkription
 
 ## 9. Status
 
-- [ ] Offen
+- [x] Implementiert (2026-02-21)
