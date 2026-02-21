@@ -1,7 +1,7 @@
 """Tests for ClaudeCodeBackend (subprocess mocked)."""
 
 import subprocess
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -19,31 +19,29 @@ def backend(tmp_path):
     )
 
 
-def _make_result(stdout="Response text", stderr="", returncode=0):
-    """Create a mock subprocess.CompletedProcess."""
-    return subprocess.CompletedProcess(
-        args=["claude", "--print", "test"],
-        returncode=returncode,
-        stdout=stdout,
-        stderr=stderr,
-    )
+def _make_mock_process(stdout="Response text", stderr="", returncode=0):
+    """Create a mock Popen process."""
+    proc = MagicMock()
+    proc.communicate.return_value = (stdout, stderr)
+    proc.returncode = returncode
+    return proc
 
 
-@patch("sprachassistent.ai.claude_code.subprocess.run")
-def test_ask_returns_response(mock_run, backend):
+@patch("sprachassistent.ai.claude_code.subprocess.Popen")
+def test_ask_returns_response(mock_popen, backend):
     """ask() returns Claude Code's stdout."""
-    mock_run.return_value = _make_result(stdout="Hello from Claude")
+    mock_popen.return_value = _make_mock_process(stdout="Hello from Claude")
     result = backend.ask("Say hello")
     assert result == "Hello from Claude"
 
 
-@patch("sprachassistent.ai.claude_code.subprocess.run")
-def test_ask_first_call_uses_system_prompt(mock_run, backend):
+@patch("sprachassistent.ai.claude_code.subprocess.Popen")
+def test_ask_first_call_uses_system_prompt(mock_popen, backend):
     """First ask() uses --system-prompt, not --continue."""
-    mock_run.return_value = _make_result()
+    mock_popen.return_value = _make_mock_process()
     backend.ask("Test message")
 
-    cmd = mock_run.call_args[0][0]
+    cmd = mock_popen.call_args[0][0]
     assert cmd[0] == "claude"
     assert "--print" in cmd
     assert "--dangerously-skip-permissions" in cmd
@@ -51,72 +49,106 @@ def test_ask_first_call_uses_system_prompt(mock_run, backend):
     assert "Test prompt" in cmd
     assert "--continue" not in cmd
     assert "Test message" in cmd
-    assert mock_run.call_args.kwargs["cwd"] == backend.working_directory
+    assert mock_popen.call_args.kwargs["cwd"] == backend.working_directory
 
 
-@patch("sprachassistent.ai.claude_code.subprocess.run")
-def test_ask_second_call_uses_continue(mock_run, backend):
+@patch("sprachassistent.ai.claude_code.subprocess.Popen")
+def test_ask_second_call_uses_continue(mock_popen, backend):
     """Subsequent ask() calls use --continue instead of --system-prompt."""
-    mock_run.return_value = _make_result()
+    mock_popen.return_value = _make_mock_process()
 
     backend.ask("First message")
     backend.ask("Second message")
 
-    cmd = mock_run.call_args[0][0]
+    cmd = mock_popen.call_args[0][0]
     assert "--continue" in cmd
     assert "--system-prompt" not in cmd
     assert "Second message" in cmd
 
 
-@patch("sprachassistent.ai.claude_code.subprocess.run")
-def test_ask_nonzero_exit_raises(mock_run, backend):
+@patch("sprachassistent.ai.claude_code.subprocess.Popen")
+def test_ask_nonzero_exit_raises(mock_popen, backend):
     """Non-zero exit code raises AIBackendError."""
-    mock_run.return_value = _make_result(returncode=1, stderr="Error occurred")
+    mock_popen.return_value = _make_mock_process(returncode=1, stderr="Error occurred")
     with pytest.raises(AIBackendError, match="exited with code 1"):
         backend.ask("Bad command")
 
 
-@patch("sprachassistent.ai.claude_code.subprocess.run")
-def test_ask_empty_response_raises(mock_run, backend):
+@patch("sprachassistent.ai.claude_code.subprocess.Popen")
+def test_ask_empty_response_raises(mock_popen, backend):
     """Empty stdout raises AIBackendError."""
-    mock_run.return_value = _make_result(stdout="")
+    mock_popen.return_value = _make_mock_process(stdout="")
     with pytest.raises(AIBackendError, match="empty response"):
         backend.ask("Silent command")
 
 
-@patch("sprachassistent.ai.claude_code.subprocess.run")
-def test_ask_timeout_raises(mock_run, backend):
+@patch("sprachassistent.ai.claude_code.subprocess.Popen")
+def test_ask_timeout_raises(mock_popen, backend):
     """subprocess.TimeoutExpired is converted to AIBackendError."""
-    mock_run.side_effect = subprocess.TimeoutExpired(cmd="claude", timeout=30)
+    proc = _make_mock_process()
+    proc.communicate.side_effect = subprocess.TimeoutExpired(cmd="claude", timeout=30)
+    mock_popen.return_value = proc
     with pytest.raises(AIBackendError, match="did not respond"):
         backend.ask("Slow command")
 
 
-@patch("sprachassistent.ai.claude_code.subprocess.run")
-def test_ask_without_system_prompt(mock_run, tmp_path):
+@patch("sprachassistent.ai.claude_code.subprocess.Popen")
+def test_ask_without_system_prompt(mock_popen, tmp_path):
     """First call without system prompt omits --system-prompt flag."""
     backend = ClaudeCodeBackend(working_directory=str(tmp_path))
-    mock_run.return_value = _make_result(stdout="OK")
+    mock_popen.return_value = _make_mock_process(stdout="OK")
     result = backend.ask("Hello")
     assert result == "OK"
 
-    cmd = mock_run.call_args[0][0]
+    cmd = mock_popen.call_args[0][0]
     assert "--system-prompt" not in cmd
     assert "--dangerously-skip-permissions" in cmd
 
 
-@patch("sprachassistent.ai.claude_code.subprocess.run")
-def test_session_not_started_on_error(mock_run, backend):
+@patch("sprachassistent.ai.claude_code.subprocess.Popen")
+def test_session_not_started_on_error(mock_popen, backend):
     """Failed first call does not mark session as started."""
-    mock_run.return_value = _make_result(returncode=1, stderr="fail")
+    mock_popen.return_value = _make_mock_process(returncode=1, stderr="fail")
 
     with pytest.raises(AIBackendError):
         backend.ask("Bad command")
 
     # Next call should still use --system-prompt, not --continue
-    mock_run.return_value = _make_result(stdout="OK")
+    mock_popen.return_value = _make_mock_process(stdout="OK")
     backend.ask("Retry")
 
-    cmd = mock_run.call_args[0][0]
+    cmd = mock_popen.call_args[0][0]
     assert "--system-prompt" in cmd
     assert "--continue" not in cmd
+
+
+@patch("sprachassistent.ai.claude_code.subprocess.Popen")
+def test_cancel_terminates_process(mock_popen, backend):
+    """cancel() terminates the running subprocess."""
+    proc = _make_mock_process()
+    mock_popen.return_value = proc
+
+    # Simulate a long-running process by setting _current_process directly
+    backend._current_process = proc
+    backend.cancel()
+
+    proc.terminate.assert_called_once()
+
+
+def test_cancel_without_process_is_noop(backend):
+    """cancel() without a running process does nothing."""
+    backend.cancel()  # Should not raise
+
+
+@patch("sprachassistent.ai.claude_code.subprocess.Popen")
+def test_session_state_after_cancel(mock_popen, backend):
+    """Cancelled first call does not mark session as started."""
+    proc = _make_mock_process()
+    # Simulate cancel: communicate raises after terminate
+    proc.communicate.side_effect = subprocess.TimeoutExpired(cmd="claude", timeout=30)
+    mock_popen.return_value = proc
+
+    with pytest.raises(AIBackendError):
+        backend.ask("Will be cancelled")
+
+    assert backend._session_started is False

@@ -1,6 +1,7 @@
 """Tests for the main loop (all components mocked)."""
 
 import subprocess
+import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -279,6 +280,133 @@ def test_error_tts_failure_does_not_crash(mock_error_path):
     # Verify it returned to LISTENING despite double failure
     last_state_call = ui.set_state.call_args_list[-1]
     assert last_state_call.args[0] == AssistantState.LISTENING
+
+
+def test_cancel_command_after_transcription():
+    """Cancel keyword after transcription skips AI and speaks confirmation."""
+    components = _make_mock_components()
+    mic = MagicMock()
+    player = MagicMock()
+    ui = MagicMock()
+
+    call_count = 0
+
+    def wake_word_side_effect(chunk):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return True
+        raise KeyboardInterrupt
+
+    components["wake_word"].process.side_effect = wake_word_side_effect
+    components["recorder"].process_chunk.return_value = False
+    components["recorder"].get_audio.return_value = b"\x00" * 3200
+    components["transcriber"].transcribe.return_value = "Stopp"
+
+    with pytest.raises(KeyboardInterrupt):
+        run_loop(components, mic, player, ui, cancel_keywords=["stopp", "abbrechen"])
+
+    # AI should not be called
+    components["ai_backend"].ask.assert_not_called()
+    # TTS should speak "Alles klar."
+    components["tts"].speak.assert_called_once()
+    spoken_text = components["tts"].speak.call_args[0][0]
+    assert "Alles klar" in spoken_text
+
+
+def test_non_cancel_text_proceeds_normally():
+    """Normal text is not treated as cancel command."""
+    components = _make_mock_components()
+    mic = MagicMock()
+    player = MagicMock()
+    ui = MagicMock()
+
+    call_count = 0
+
+    def wake_word_side_effect(chunk):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return True
+        raise KeyboardInterrupt
+
+    components["wake_word"].process.side_effect = wake_word_side_effect
+    components["recorder"].process_chunk.return_value = False
+    components["recorder"].get_audio.return_value = b"\x00" * 3200
+    components["transcriber"].transcribe.return_value = "Schreibe eine Notiz"
+    components["ai_backend"].ask.return_value = "Erledigt."
+
+    with pytest.raises(KeyboardInterrupt):
+        run_loop(components, mic, player, ui, cancel_keywords=["stopp", "abbrechen"])
+
+    # AI should be called normally
+    components["ai_backend"].ask.assert_called_once_with("Schreibe eine Notiz")
+
+
+def test_cancel_during_ai_processing():
+    """Cancel via wake word during AI processing terminates the request."""
+    components = _make_mock_components()
+    mic = MagicMock()
+    player = MagicMock()
+    ui = MagicMock()
+
+    # AI takes a long time (blocks until cancelled)
+    ai_cancelled = threading.Event()
+
+    def slow_ask(msg):
+        ai_cancelled.wait(timeout=5)
+        raise RuntimeError("Cancelled")
+
+    components["ai_backend"].ask.side_effect = slow_ask
+
+    # Wake word detection: first=True (initial), then False during AI,
+    # then True (cancel wake word), then raise to exit
+    wake_calls = [0]
+
+    def wake_word_side_effect(chunk):
+        wake_calls[0] += 1
+        if wake_calls[0] == 1:
+            return True  # Initial wake word
+        if wake_calls[0] == 3:
+            return True  # Cancel wake word during AI processing
+        if wake_calls[0] > 10:
+            raise KeyboardInterrupt
+        return False
+
+    components["wake_word"].process.side_effect = wake_word_side_effect
+
+    # First recording: normal command
+    # Second recording (cancel): "Stopp"
+    record_calls = [0]
+
+    def recorder_get_audio():
+        record_calls[0] += 1
+        return b"\x00" * 3200
+
+    components["recorder"].process_chunk.return_value = False
+    components["recorder"].get_audio.side_effect = recorder_get_audio
+
+    # First transcription: normal, second: cancel keyword
+    transcribe_calls = [0]
+
+    def transcribe_side_effect(audio):
+        transcribe_calls[0] += 1
+        if transcribe_calls[0] == 1:
+            return "Schreibe eine Notiz"
+        return "Stopp"
+
+    components["transcriber"].transcribe.side_effect = transcribe_side_effect
+
+    def cancel_side_effect():
+        ai_cancelled.set()
+
+    components["ai_backend"].cancel.side_effect = cancel_side_effect
+
+    with pytest.raises(KeyboardInterrupt):
+        run_loop(components, mic, player, ui, cancel_keywords=["stopp", "abbrechen"])
+
+    # cancel() should have been called on the backend
+    components["ai_backend"].cancel.assert_called_once()
 
 
 @patch("sprachassistent.main.WakeWordDetector")

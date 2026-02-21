@@ -97,6 +97,12 @@ def _thinking_beep_loop(
                 pass
 
 
+def _is_cancel_command(text: str, cancel_keywords: list[str]) -> bool:
+    """Check if transcribed text is a cancel command."""
+    normalized = text.strip().lower()
+    return any(keyword in normalized for keyword in cancel_keywords)
+
+
 def _speak_error(
     tts: OpenAITextToSpeech,
     player: AudioPlayer,
@@ -126,6 +132,7 @@ def run_loop(
     player: AudioPlayer,
     ui: TerminalUI,
     thinking_beep_interval: float = 3,
+    cancel_keywords: list[str] | None = None,
 ) -> None:
     """Run the main assistant loop.
 
@@ -134,7 +141,11 @@ def run_loop(
         mic: Open microphone stream.
         player: Open audio player.
         ui: Active terminal UI.
+        thinking_beep_interval: Seconds between beeps while AI is thinking.
+        cancel_keywords: List of keywords that cancel the current command.
     """
+    if cancel_keywords is None:
+        cancel_keywords = []
     wake_word: WakeWordDetector = components["wake_word"]
     recorder: SpeechRecorder = components["recorder"]
     transcriber: WhisperTranscriber = components["transcriber"]
@@ -196,7 +207,19 @@ def run_loop(
         ui.set_transcription(text)
         ui.log(f"Transcription: {text}")
 
-        # Phase 4: Get AI response (with periodic beep)
+        # Check for cancel command
+        if cancel_keywords and _is_cancel_command(text, cancel_keywords):
+            ui.log("Command cancelled by user.")
+            try:
+                tts.speak("Alles klar.", pa=player._pa)
+            except Exception:
+                pass
+            if _READY_PATH.exists():
+                player.play_wav(_READY_PATH)
+            ui.set_state(AssistantState.LISTENING)
+            continue
+
+        # Phase 4: Get AI response (with periodic beep + cancel support)
         stop_beep = threading.Event()
         beep_thread = threading.Thread(
             target=_thinking_beep_loop,
@@ -204,11 +227,66 @@ def run_loop(
             daemon=True,
         )
         beep_thread.start()
-        try:
-            response = ai_backend.ask(text)
-        except Exception as e:
-            stop_beep.set()
-            beep_thread.join(timeout=1)
+
+        # Run AI in a thread so main thread can listen for cancel
+        ai_result: dict = {"response": None, "error": None}
+        ai_done = threading.Event()
+
+        def _run_ai() -> None:
+            try:
+                ai_result["response"] = ai_backend.ask(text)
+            except Exception as e:
+                ai_result["error"] = e
+            finally:
+                ai_done.set()
+
+        ai_thread = threading.Thread(target=_run_ai, daemon=True)
+        ai_thread.start()
+
+        # Listen for cancel while AI is working
+        cancelled = False
+        while not ai_done.is_set():
+            try:
+                chunk = mic.read_chunk()
+            except Exception:
+                break
+            if cancel_keywords and wake_word.process(chunk):
+                wake_word.reset()
+                if _DING_PATH.exists():
+                    player.play_wav(_DING_PATH)
+                # Record the cancel utterance
+                recorder.start()
+                while recorder.process_chunk(mic.read_chunk()):
+                    if ai_done.is_set():
+                        break
+                cancel_audio = recorder.get_audio()
+                if cancel_audio:
+                    try:
+                        cancel_text = transcriber.transcribe(cancel_audio)
+                        if _is_cancel_command(cancel_text, cancel_keywords):
+                            ai_backend.cancel()
+                            cancelled = True
+                            break
+                    except Exception:
+                        pass
+
+        stop_beep.set()
+        beep_thread.join(timeout=1)
+        ai_thread.join(timeout=2)
+
+        if cancelled:
+            ui.log("AI processing cancelled by user.")
+            try:
+                tts.speak("Abgebrochen.", pa=player._pa)
+            except Exception:
+                pass
+            if _READY_PATH.exists():
+                player.play_wav(_READY_PATH)
+            ui.set_state(AssistantState.LISTENING)
+            continue
+
+        if ai_result["error"] is not None:
+            e = ai_result["error"]
             ui.set_state(AssistantState.ERROR)
             ui.log(f"AI error: {e}")
             if isinstance(e.__cause__, subprocess.TimeoutExpired):
@@ -219,9 +297,8 @@ def run_loop(
                 player.play_wav(_READY_PATH)
             ui.set_state(AssistantState.LISTENING)
             continue
-        finally:
-            stop_beep.set()
-            beep_thread.join(timeout=1)
+
+        response = ai_result["response"]
 
         ui.set_response(response)
         ui.log(f"Response: {response}")
@@ -275,7 +352,16 @@ def main() -> None:
     ):
         try:
             beep_interval = config["ai"].get("thinking_beep_interval", 3)
-            run_loop(components, mic, player, ui, thinking_beep_interval=beep_interval)
+            commands_cfg = config.get("commands", {})
+            cancel_kw = commands_cfg.get("cancel_keywords", [])
+            run_loop(
+                components,
+                mic,
+                player,
+                ui,
+                thinking_beep_interval=beep_interval,
+                cancel_keywords=cancel_kw,
+            )
         except KeyboardInterrupt:
             ui.log("Shutting down...")
 

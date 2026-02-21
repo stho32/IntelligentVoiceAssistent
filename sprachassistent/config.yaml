@@ -22,6 +22,13 @@ tts:
   voice: onyx
   speed: 1.0
 
+commands:
+  cancel_keywords:
+    - "abbrechen"
+    - "stopp"
+    - "vergiss es"
+    - "jarvis stopp"
+
 audio:
   sample_rate: 16000
   channels: 1
