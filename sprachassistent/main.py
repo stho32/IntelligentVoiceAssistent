@@ -133,6 +133,7 @@ def run_loop(
     ui: TerminalUI,
     thinking_beep_interval: float = 3,
     cancel_keywords: list[str] | None = None,
+    reset_keywords: list[str] | None = None,
 ) -> None:
     """Run the main assistant loop.
 
@@ -143,9 +144,12 @@ def run_loop(
         ui: Active terminal UI.
         thinking_beep_interval: Seconds between beeps while AI is thinking.
         cancel_keywords: List of keywords that cancel the current command.
+        reset_keywords: List of keywords that reset the conversation session.
     """
     if cancel_keywords is None:
         cancel_keywords = []
+    if reset_keywords is None:
+        reset_keywords = []
     wake_word: WakeWordDetector = components["wake_word"]
     recorder: SpeechRecorder = components["recorder"]
     transcriber: WhisperTranscriber = components["transcriber"]
@@ -212,6 +216,22 @@ def run_loop(
             ui.log("Command cancelled by user.")
             try:
                 tts.speak("Alles klar.", pa=player._pa)
+            except Exception:
+                pass
+            if _READY_PATH.exists():
+                player.play_wav(_READY_PATH)
+            ui.set_state(AssistantState.LISTENING)
+            continue
+
+        # Check for reset command
+        if reset_keywords and _is_cancel_command(text, reset_keywords):
+            ai_backend.reset_session()
+            ui.log("Conversation reset by user.")
+            try:
+                tts.speak(
+                    "Alles klar, ich starte eine neue Konversation.",
+                    pa=player._pa,
+                )
             except Exception:
                 pass
             if _READY_PATH.exists():
@@ -354,6 +374,7 @@ def main() -> None:
             beep_interval = config["ai"].get("thinking_beep_interval", 3)
             commands_cfg = config.get("commands", {})
             cancel_kw = commands_cfg.get("cancel_keywords", [])
+            reset_kw = commands_cfg.get("reset_keywords", [])
             run_loop(
                 components,
                 mic,
@@ -361,6 +382,7 @@ def main() -> None:
                 ui,
                 thinking_beep_interval=beep_interval,
                 cancel_keywords=cancel_kw,
+                reset_keywords=reset_kw,
             )
         except KeyboardInterrupt:
             ui.log("Shutting down...")

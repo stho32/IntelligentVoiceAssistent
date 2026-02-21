@@ -28,6 +28,11 @@ commands:
     - "stopp"
     - "vergiss es"
     - "jarvis stopp"
+  reset_keywords:
+    - "neue konversation"
+    - "reset"
+    - "vergiss alles"
+    - "von vorne"
 
 audio:
   sample_rate: 16000

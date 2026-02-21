@@ -101,6 +101,15 @@ class ClaudeCodeBackend:
         log.info("Claude Code response: %s", response[:80])
         return response
 
+    def reset_session(self) -> None:
+        """Reset the conversation session.
+
+        The next ask() call will start a fresh session with the system
+        prompt instead of using --continue.
+        """
+        self._session_started = False
+        log.info("Conversation session reset")
+
     def cancel(self) -> None:
         """Cancel the currently running AI request.
 

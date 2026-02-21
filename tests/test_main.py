@@ -409,6 +409,83 @@ def test_cancel_during_ai_processing():
     components["ai_backend"].cancel.assert_called_once()
 
 
+def test_reset_command_resets_session():
+    """Reset keyword resets the AI session and speaks confirmation."""
+    components = _make_mock_components()
+    mic = MagicMock()
+    player = MagicMock()
+    ui = MagicMock()
+
+    call_count = 0
+
+    def wake_word_side_effect(chunk):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return True
+        raise KeyboardInterrupt
+
+    components["wake_word"].process.side_effect = wake_word_side_effect
+    components["recorder"].process_chunk.return_value = False
+    components["recorder"].get_audio.return_value = b"\x00" * 3200
+    components["transcriber"].transcribe.return_value = "Neue Konversation"
+
+    with pytest.raises(KeyboardInterrupt):
+        run_loop(
+            components,
+            mic,
+            player,
+            ui,
+            reset_keywords=["neue konversation", "reset"],
+        )
+
+    # AI should not be called
+    components["ai_backend"].ask.assert_not_called()
+    # reset_session should be called
+    components["ai_backend"].reset_session.assert_called_once()
+    # TTS should speak confirmation
+    components["tts"].speak.assert_called_once()
+    spoken_text = components["tts"].speak.call_args[0][0]
+    assert "neue Konversation" in spoken_text
+
+
+def test_reset_before_cancel_priority():
+    """Cancel keywords are checked before reset keywords."""
+    components = _make_mock_components()
+    mic = MagicMock()
+    player = MagicMock()
+    ui = MagicMock()
+
+    call_count = 0
+
+    def wake_word_side_effect(chunk):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return True
+        raise KeyboardInterrupt
+
+    components["wake_word"].process.side_effect = wake_word_side_effect
+    components["recorder"].process_chunk.return_value = False
+    components["recorder"].get_audio.return_value = b"\x00" * 3200
+    # "Stopp" matches cancel, not reset
+    components["transcriber"].transcribe.return_value = "Stopp"
+
+    with pytest.raises(KeyboardInterrupt):
+        run_loop(
+            components,
+            mic,
+            player,
+            ui,
+            cancel_keywords=["stopp"],
+            reset_keywords=["reset"],
+        )
+
+    # Cancel takes priority - reset should NOT be called
+    components["ai_backend"].reset_session.assert_not_called()
+    components["ai_backend"].ask.assert_not_called()
+
+
 @patch("sprachassistent.main.WakeWordDetector")
 @patch("sprachassistent.main.SpeechRecorder")
 @patch("sprachassistent.main.WhisperTranscriber")

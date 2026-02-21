@@ -152,3 +152,35 @@ def test_session_state_after_cancel(mock_popen, backend):
         backend.ask("Will be cancelled")
 
     assert backend._session_started is False
+
+
+@patch("sprachassistent.ai.claude_code.subprocess.Popen")
+def test_reset_session_clears_flag(mock_popen, backend):
+    """reset_session() sets _session_started back to False."""
+    mock_popen.return_value = _make_mock_process()
+
+    backend.ask("First message")
+    assert backend._session_started is True
+
+    backend.reset_session()
+    assert backend._session_started is False
+
+
+@patch("sprachassistent.ai.claude_code.subprocess.Popen")
+def test_reset_session_next_call_uses_system_prompt(mock_popen, backend):
+    """After reset, next ask() uses --system-prompt again."""
+    mock_popen.return_value = _make_mock_process()
+
+    backend.ask("First message")
+    backend.reset_session()
+    backend.ask("After reset")
+
+    cmd = mock_popen.call_args[0][0]
+    assert "--system-prompt" in cmd
+    assert "--continue" not in cmd
+
+
+def test_reset_session_without_session_is_safe(backend):
+    """reset_session() before any ask() does not raise."""
+    backend.reset_session()  # Should not raise
+    assert backend._session_started is False
