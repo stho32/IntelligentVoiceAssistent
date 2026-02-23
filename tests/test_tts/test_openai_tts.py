@@ -1,6 +1,6 @@
-"""Tests for OpenAITextToSpeech (API and PyAudio mocked)."""
+"""Tests for OpenAITextToSpeech (API and audio output mocked)."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -29,21 +29,18 @@ def mock_openai():
 
 
 @pytest.fixture()
-def mock_pyaudio():
-    """Mock PyAudio for speaker output."""
-    with patch("sprachassistent.tts.openai_tts.pyaudio") as mock_mod:
-        mock_pa = MagicMock()
-        mock_stream = MagicMock()
-        mock_pa.open.return_value = mock_stream
-        mock_mod.PyAudio.return_value = mock_pa
-        mock_mod.paInt16 = 8
-        yield {"module": mock_mod, "pa": mock_pa, "stream": mock_stream}
+def mock_player():
+    """Mock AudioOutput player."""
+    player = MagicMock()
+    stream = MagicMock()
+    player.open_pcm_stream.return_value = stream
+    return {"player": player, "stream": stream}
 
 
-def test_speak_streams_audio(mock_openai, mock_pyaudio):
+def test_speak_streams_audio(mock_openai, mock_player):
     """speak() streams PCM chunks to the audio output."""
     tts = OpenAITextToSpeech(client=mock_openai)
-    tts.speak("Hallo Welt")
+    tts.speak("Hallo Welt", player=mock_player["player"])
 
     # Verify streaming API was called
     mock_openai.audio.speech.with_streaming_response.create.assert_called_once()
@@ -53,21 +50,21 @@ def test_speak_streams_audio(mock_openai, mock_pyaudio):
     assert call_kwargs["voice"] == "onyx"
 
     # Verify audio was written to stream
-    assert mock_pyaudio["stream"].write.call_count == 2
-    mock_pyaudio["stream"].close.assert_called_once()
+    assert mock_player["stream"].write.call_count == 2
+    mock_player["stream"].close.assert_called_once()
 
 
-def test_speak_with_provided_pyaudio(mock_openai, mock_pyaudio):
-    """speak() uses provided PyAudio instance without creating/terminating its own."""
+def test_speak_with_provided_player(mock_openai, mock_player):
+    """speak() uses provided player without creating its own."""
     tts = OpenAITextToSpeech(client=mock_openai)
-    pa = mock_pyaudio["pa"]
+    player = mock_player["player"]
 
-    tts.speak("Test", pa=pa)
+    tts.speak("Test", player=player)
 
-    # Should not create a new PyAudio instance
-    mock_pyaudio["module"].PyAudio.assert_not_called()
-    # Should not terminate the provided pa
-    pa.terminate.assert_not_called()
+    # Should open a PCM stream from the player
+    player.open_pcm_stream.assert_called_once()
+    # Should not call close on the player (caller owns it)
+    player.close.assert_not_called()
 
 
 def test_speak_empty_text_raises(mock_openai):
@@ -94,10 +91,10 @@ def test_synthesize_empty_text_raises(mock_openai):
         tts.synthesize("   ")
 
 
-def test_api_error_propagates(mock_openai, mock_pyaudio):
+def test_api_error_propagates(mock_openai, mock_player):
     """API errors propagate through speak()."""
     mock_openai.audio.speech.with_streaming_response.create.side_effect = RuntimeError("API down")
     tts = OpenAITextToSpeech(client=mock_openai)
 
     with pytest.raises(RuntimeError, match="API down"):
-        tts.speak("Test")
+        tts.speak("Test", player=mock_player["player"])

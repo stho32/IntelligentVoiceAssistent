@@ -5,18 +5,19 @@ Main loop: Wake-Word -> Ding -> Record -> STT -> AI -> TTS -> Repeat.
 
 import argparse
 import logging
-import os
 import subprocess
-import sys
 import threading
 from pathlib import Path
 
 from sprachassistent.ai.claude_code import ClaudeCodeBackend
-from sprachassistent.audio.microphone import MicrophoneStream
-from sprachassistent.audio.player import AudioPlayer
 from sprachassistent.audio.recorder import SpeechRecorder
 from sprachassistent.audio.wake_word import WakeWordDetector
 from sprachassistent.config import get_config
+from sprachassistent.platform.factory import (
+    create_audio_input,
+    create_audio_output,
+    create_restart_strategy,
+)
 from sprachassistent.stt.whisper_api import WhisperTranscriber
 from sprachassistent.tts.openai_tts import OpenAITextToSpeech
 from sprachassistent.utils.logging import get_logger, setup_logging
@@ -93,7 +94,7 @@ def create_components(config: dict, *, resume_session: bool = True) -> dict:
 
 
 def _thinking_beep_loop(
-    player: AudioPlayer,
+    player,
     stop_event: threading.Event,
     interval: float,
 ) -> None:
@@ -111,9 +112,9 @@ class _RestartRequested(Exception):
 
 
 def _restart_assistant() -> None:
-    """Restart the assistant process by replacing it with a fresh instance."""
-    log.info("Restarting assistant process via os.execv...")
-    os.execv(sys.executable, [sys.executable] + sys.argv)
+    """Restart the assistant process using a platform-appropriate strategy."""
+    strategy = create_restart_strategy()
+    strategy()
 
 
 def _is_cancel_command(text: str, cancel_keywords: list[str]) -> bool:
@@ -124,7 +125,7 @@ def _is_cancel_command(text: str, cancel_keywords: list[str]) -> bool:
 
 def _speak_error(
     tts: OpenAITextToSpeech,
-    player: AudioPlayer,
+    player,
     error_key: str,
     ui: TerminalUI,
 ) -> None:
@@ -135,7 +136,7 @@ def _speak_error(
     """
     message = _ERROR_MESSAGES.get(error_key, _ERROR_MESSAGES["ai_general"])
     try:
-        tts.speak(message, pa=player._pa)
+        tts.speak(message, player=player)
     except Exception as tts_err:
         ui.log(f"Error TTS also failed: {tts_err}")
         if _ERROR_SOUND_PATH.exists():
@@ -147,8 +148,8 @@ def _speak_error(
 
 def run_loop(
     components: dict,
-    mic: MicrophoneStream,
-    player: AudioPlayer,
+    mic,
+    player,
     ui: TerminalUI,
     thinking_beep_interval: float = 3,
     cancel_keywords: list[str] | None = None,
@@ -238,7 +239,7 @@ def run_loop(
         if cancel_keywords and _is_cancel_command(text, cancel_keywords):
             ui.log("Command cancelled by user.")
             try:
-                tts.speak("Alles klar.", pa=player._pa)
+                tts.speak("Alles klar.", player=player)
             except Exception:
                 pass
             if _READY_PATH.exists():
@@ -253,7 +254,7 @@ def run_loop(
             try:
                 tts.speak(
                     "Alles klar, ich starte eine neue Konversation.",
-                    pa=player._pa,
+                    player=player,
                 )
             except Exception:
                 pass
@@ -268,7 +269,7 @@ def run_loop(
             try:
                 tts.speak(
                     "Alles klar, ich starte jetzt neu.",
-                    pa=player._pa,
+                    player=player,
                 )
             except Exception:
                 pass
@@ -332,7 +333,7 @@ def run_loop(
         if cancelled:
             ui.log("AI processing cancelled by user.")
             try:
-                tts.speak("Abgebrochen.", pa=player._pa)
+                tts.speak("Abgebrochen.", player=player)
             except Exception:
                 pass
             if _READY_PATH.exists():
@@ -361,7 +362,7 @@ def run_loop(
         # Phase 5: Speak response
         ui.set_state(AssistantState.SPEAKING)
         try:
-            tts.speak(response, pa=player._pa)
+            tts.speak(response, player=player)
         except Exception as e:
             ui.log(f"TTS error: {e}")
             if _ERROR_SOUND_PATH.exists():
@@ -405,12 +406,12 @@ def main() -> None:
         raise SystemExit(1) from e
 
     with (
-        MicrophoneStream(
+        create_audio_input(
             rate=audio_cfg["sample_rate"],
             channels=audio_cfg.get("channels", 1),
             chunk_size=audio_cfg.get("chunk_size", 1280),
         ) as mic,
-        AudioPlayer() as player,
+        create_audio_output() as player,
         TerminalUI() as ui,
     ):
         try:

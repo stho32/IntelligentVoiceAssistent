@@ -133,27 +133,27 @@ Die konkreten Windows-Audio-Abhaengigkeiten werden bei der Implementierung evalu
 ## 4. Akzeptanzkriterien
 
 ### Abstraktion
-- [ ] Es existieren abstrakte Interfaces (Protocol oder ABC) fuer Audio-Eingabe, Audio-Ausgabe und Prozess-Neustart
-- [ ] Die bestehenden Linux-Implementierungen sind **unveraendert funktionsfaehig** und erfuellen die Interfaces
-- [ ] Die Interfaces sind vollstaendig dokumentiert (Docstrings mit Parametern und Rueckgabetypen)
+- [x] Es existieren abstrakte Interfaces (Protocol oder ABC) fuer Audio-Eingabe, Audio-Ausgabe und Prozess-Neustart
+- [x] Die bestehenden Linux-Implementierungen sind **unveraendert funktionsfaehig** und erfuellen die Interfaces
+- [x] Die Interfaces sind vollstaendig dokumentiert (Docstrings mit Parametern und Rueckgabetypen)
 
 ### Windows-Implementierung
-- [ ] Es existieren Windows-spezifische Implementierungen fuer Audio-Eingabe, Audio-Ausgabe und Prozess-Neustart
-- [ ] Die Windows-Implementierungen erfuellen dieselben Interfaces wie die Linux-Varianten
+- [x] Es existieren Windows-spezifische Implementierungen fuer Audio-Eingabe, Audio-Ausgabe und Prozess-Neustart
+- [x] Die Windows-Implementierungen erfuellen dieselben Interfaces wie die Linux-Varianten
 - [ ] Audio-Aufnahme und -Wiedergabe funktionieren unter Windows mit dem Standard-Audiogeraet
 
 ### Plattform-Erkennung
-- [ ] Die richtige Implementierung wird automatisch anhand der Plattform geladen
+- [x] Die richtige Implementierung wird automatisch anhand der Plattform geladen
 - [ ] Optional: Plattform kann in `config.yaml` explizit ueberschrieben werden
 
 ### TTS-Entkopplung
-- [ ] `OpenAITextToSpeech` hat keine direkte `pyaudio`-Abhaengigkeit mehr
-- [ ] TTS-Ausgabe laeuft ueber die abstrahierte Audio-Ausgabe
+- [x] `OpenAITextToSpeech` hat keine direkte `pyaudio`-Abhaengigkeit mehr
+- [x] TTS-Ausgabe laeuft ueber die abstrahierte Audio-Ausgabe
 
 ### Tests
-- [ ] Bestehende Tests laufen weiterhin unveraendert durch
-- [ ] Neue Tests fuer die Abstraktionsschicht und Factory-Logik
-- [ ] Neue Tests fuer die Windows-Implementierungen (mockbar ohne Windows)
+- [x] Bestehende Tests laufen weiterhin unveraendert durch
+- [x] Neue Tests fuer die Abstraktionsschicht und Factory-Logik
+- [x] Neue Tests fuer die Windows-Implementierungen (mockbar ohne Windows)
 
 ### Nicht-Ziele (explizit ausgeklammert)
 - macOS-Unterstuetzung (kann spaeter ergaenzt werden)
@@ -210,4 +210,4 @@ Die konkrete Dateistruktur (ob `platform/`-Verzeichnis oder andere Organisation)
 
 ## 7. Status
 
-- [ ] Offen
+- [x] Implementiert

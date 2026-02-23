@@ -4,8 +4,14 @@ Converts text responses to speech and streams audio for
 low-latency playback at 24kHz.
 """
 
-import pyaudio
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from openai import OpenAI
+
+if TYPE_CHECKING:
+    from sprachassistent.platform.interfaces import AudioOutput
 
 # OpenAI TTS PCM format: 24kHz, 16-bit, mono
 TTS_SAMPLE_RATE = 24000
@@ -35,14 +41,15 @@ class OpenAITextToSpeech:
         self.speed = speed
         self._client = client or OpenAI()
 
-    def speak(self, text: str, pa: pyaudio.PyAudio | None = None) -> None:
+    def speak(self, text: str, player: AudioOutput | None = None) -> None:
         """Convert text to speech and play through speakers.
 
         Streams PCM audio chunks for low-latency playback.
 
         Args:
             text: Text to speak.
-            pa: Optional PyAudio instance (creates one if not provided).
+            player: Audio output to play through. If *None*, a default
+                player is created via the platform factory.
 
         Raises:
             ValueError: If text is empty.
@@ -50,16 +57,14 @@ class OpenAITextToSpeech:
         if not text.strip():
             raise ValueError("No text to speak.")
 
-        own_pa = pa is None
-        if own_pa:
-            pa = pyaudio.PyAudio()
+        own_player = player is None
+        if own_player:
+            from sprachassistent.platform.factory import create_audio_output
 
-        stream = pa.open(
-            format=pyaudio.paInt16,
-            channels=TTS_CHANNELS,
-            rate=TTS_SAMPLE_RATE,
-            output=True,
-        )
+            player = create_audio_output()
+            player.__enter__()
+
+        stream = player.open_pcm_stream(rate=TTS_SAMPLE_RATE, channels=TTS_CHANNELS)
 
         try:
             with self._client.audio.speech.with_streaming_response.create(
@@ -74,8 +79,8 @@ class OpenAITextToSpeech:
         finally:
             stream.stop_stream()
             stream.close()
-            if own_pa:
-                pa.terminate()
+            if own_player:
+                player.close()
 
     def synthesize(self, text: str) -> bytes:
         """Convert text to PCM audio bytes without playing.

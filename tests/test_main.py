@@ -602,8 +602,8 @@ def test_main_handles_restart_requested(mock_restart):
         patch("sprachassistent.main.setup_logging"),
         patch("sprachassistent.main.get_config") as mock_cfg,
         patch("sprachassistent.main.create_components"),
-        patch("sprachassistent.main.MicrophoneStream"),
-        patch("sprachassistent.main.AudioPlayer"),
+        patch("sprachassistent.main.create_audio_input"),
+        patch("sprachassistent.main.create_audio_output"),
         patch("sprachassistent.main.TerminalUI"),
         patch("sprachassistent.main.run_loop") as mock_run_loop,
     ):
@@ -676,8 +676,8 @@ def test_main_new_session_flag(mock_restart):
         patch("sprachassistent.main.setup_logging"),
         patch("sprachassistent.main.get_config") as mock_cfg,
         patch("sprachassistent.main.create_components") as mock_create,
-        patch("sprachassistent.main.MicrophoneStream"),
-        patch("sprachassistent.main.AudioPlayer"),
+        patch("sprachassistent.main.create_audio_input"),
+        patch("sprachassistent.main.create_audio_output"),
         patch("sprachassistent.main.TerminalUI"),
         patch("sprachassistent.main.run_loop") as mock_run_loop,
     ):
