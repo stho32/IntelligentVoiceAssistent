@@ -595,6 +595,7 @@ def test_restart_tts_failure_still_raises():
 
 
 @patch("sprachassistent.main._restart_assistant")
+@patch("sys.argv", ["sprachassistent"])
 def test_main_handles_restart_requested(mock_restart):
     """main() catches _RestartRequested and calls _restart_assistant."""
     with (
@@ -635,3 +636,62 @@ def test_create_components(mock_tts, mock_ai, mock_stt, mock_rec, mock_ww):
     assert "transcriber" in components
     assert "ai_backend" in components
     assert "tts" in components
+
+
+@patch("sprachassistent.main.WakeWordDetector")
+@patch("sprachassistent.main.SpeechRecorder")
+@patch("sprachassistent.main.WhisperTranscriber")
+@patch("sprachassistent.main.ClaudeCodeBackend")
+@patch("sprachassistent.main.OpenAITextToSpeech")
+def test_create_components_passes_resume_session(mock_tts, mock_ai, mock_stt, mock_rec, mock_ww):
+    """create_components passes resume_session=False to ClaudeCodeBackend."""
+    config = _make_config()
+    create_components(config, resume_session=False)
+
+    mock_ai.assert_called_once()
+    kwargs = mock_ai.call_args.kwargs
+    assert kwargs["resume_session"] is False
+
+
+@patch("sprachassistent.main.WakeWordDetector")
+@patch("sprachassistent.main.SpeechRecorder")
+@patch("sprachassistent.main.WhisperTranscriber")
+@patch("sprachassistent.main.ClaudeCodeBackend")
+@patch("sprachassistent.main.OpenAITextToSpeech")
+def test_create_components_default_resume_session(mock_tts, mock_ai, mock_stt, mock_rec, mock_ww):
+    """create_components defaults to resume_session=True."""
+    config = _make_config()
+    create_components(config)
+
+    mock_ai.assert_called_once()
+    kwargs = mock_ai.call_args.kwargs
+    assert kwargs["resume_session"] is True
+
+
+@patch("sprachassistent.main._restart_assistant")
+@patch("sys.argv", ["sprachassistent", "--new-session"])
+def test_main_new_session_flag(mock_restart):
+    """--new-session in argv sets resume_session=False."""
+    with (
+        patch("sprachassistent.main.setup_logging"),
+        patch("sprachassistent.main.get_config") as mock_cfg,
+        patch("sprachassistent.main.create_components") as mock_create,
+        patch("sprachassistent.main.MicrophoneStream"),
+        patch("sprachassistent.main.AudioPlayer"),
+        patch("sprachassistent.main.TerminalUI"),
+        patch("sprachassistent.main.run_loop") as mock_run_loop,
+    ):
+        mock_cfg.return_value = {
+            "audio": {"sample_rate": 16000, "channels": 1, "chunk_size": 1280},
+            "ai": {"thinking_beep_interval": 3},
+            "commands": {},
+        }
+        mock_run_loop.side_effect = KeyboardInterrupt
+
+        from sprachassistent.main import main
+
+        main()
+
+        mock_create.assert_called_once()
+        kwargs = mock_create.call_args.kwargs
+        assert kwargs["resume_session"] is False

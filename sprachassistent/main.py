@@ -3,6 +3,7 @@
 Main loop: Wake-Word -> Ding -> Record -> STT -> AI -> TTS -> Repeat.
 """
 
+import argparse
 import logging
 import os
 import subprocess
@@ -39,8 +40,13 @@ _ERROR_MESSAGES = {
 }
 
 
-def create_components(config: dict) -> dict:
+def create_components(config: dict, *, resume_session: bool = True) -> dict:
     """Create all assistant components from config.
+
+    Args:
+        config: Application configuration dictionary.
+        resume_session: If True (default), the AI backend resumes the
+            most recent Claude Code session on first call.
 
     Returns:
         Dictionary with component instances.
@@ -76,6 +82,7 @@ def create_components(config: dict) -> dict:
             working_directory=ai_cfg["working_directory"],
             system_prompt=system_prompt,
             timeout=ai_cfg.get("timeout", 300),
+            resume_session=resume_session,
         ),
         "tts": OpenAITextToSpeech(
             model=tts_cfg["model"],
@@ -373,6 +380,14 @@ def run_loop(
 
 def main() -> None:
     """Start the voice assistant."""
+    parser = argparse.ArgumentParser(description="Jarvis Voice Assistant")
+    parser.add_argument(
+        "--new-session",
+        action="store_true",
+        help="Start with a fresh conversation instead of resuming the previous one",
+    )
+    args = parser.parse_args()
+
     setup_logging(level=logging.DEBUG)
 
     try:
@@ -384,7 +399,7 @@ def main() -> None:
     audio_cfg = config["audio"]
 
     try:
-        components = create_components(config)
+        components = create_components(config, resume_session=not args.new_session)
     except Exception as e:
         log.error("Failed to initialize components: %s", e)
         raise SystemExit(1) from e

@@ -89,6 +89,7 @@ Alle Feature-Anforderungen liegen in `Requirements/` und folgen dem Schema `NNN-
 
 - `001` bis `010`: Basisarchitektur, Konversation, Audio, UI, Fehlerbehandlung, Abbruch, Reset, Hilfe, Neustart
 - `011`: Selbstbewusstsein und Quelltext-Zugriff (dieses Feature)
+- `012`: Konversations-Persistenz ueber Neustart
 
 ## Language
 

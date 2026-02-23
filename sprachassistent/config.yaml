@@ -20,7 +20,7 @@ ai:
 tts:
   provider: openai
   model: tts-1
-  voice: onyx
+  voice: sage
   speed: 1.0
 
 commands:
@@ -44,6 +44,6 @@ audio:
   channels: 1
   chunk_size: 1280               # 80ms at 16kHz (wake-word frame size)
   vad_chunk_size: 512            # 32ms at 16kHz (VAD frame size)
-  silence_threshold_sec: 1.5     # pause until recording stops
+  silence_threshold_sec: 2.0     # pause until recording stops
   max_recording_sec: 30
-  vad_threshold: 0.5             # speech probability threshold
+  vad_threshold: 0.4             # speech probability threshold

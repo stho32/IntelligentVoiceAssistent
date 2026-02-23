@@ -11,11 +11,12 @@ from sprachassistent.exceptions import AIBackendError
 
 @pytest.fixture()
 def backend(tmp_path):
-    """Create a backend with a temp working directory."""
+    """Create a backend with a temp working directory (no resume)."""
     return ClaudeCodeBackend(
         working_directory=str(tmp_path),
         system_prompt="Test prompt",
         timeout=30,
+        resume_session=False,
     )
 
 
@@ -184,3 +185,129 @@ def test_reset_session_without_session_is_safe(backend):
     """reset_session() before any ask() does not raise."""
     backend.reset_session()  # Should not raise
     assert backend._session_started is False
+
+
+@patch("sprachassistent.ai.claude_code.subprocess.Popen")
+def test_ask_first_call_uses_resume_by_default(mock_popen, tmp_path):
+    """Default backend (resume_session=True) uses --resume on first call."""
+    backend = ClaudeCodeBackend(
+        working_directory=str(tmp_path),
+        system_prompt="Test prompt",
+        timeout=30,
+    )
+    mock_popen.return_value = _make_mock_process()
+    backend.ask("Test message")
+
+    cmd = mock_popen.call_args[0][0]
+    assert "--resume" in cmd
+    assert "--system-prompt" not in cmd
+    assert "--continue" not in cmd
+
+
+@patch("sprachassistent.ai.claude_code.subprocess.Popen")
+def test_ask_first_call_uses_system_prompt_when_no_resume(mock_popen, backend):
+    """Backend with resume_session=False uses --system-prompt on first call."""
+    mock_popen.return_value = _make_mock_process()
+    backend.ask("Test message")
+
+    cmd = mock_popen.call_args[0][0]
+    assert "--system-prompt" in cmd
+    assert "--resume" not in cmd
+    assert "--continue" not in cmd
+
+
+@patch("sprachassistent.ai.claude_code.subprocess.Popen")
+def test_ask_second_call_uses_continue_after_resume(mock_popen, tmp_path):
+    """After a successful --resume, subsequent calls use --continue."""
+    backend = ClaudeCodeBackend(
+        working_directory=str(tmp_path),
+        system_prompt="Test prompt",
+        timeout=30,
+    )
+    mock_popen.return_value = _make_mock_process()
+    backend.ask("First message")
+    backend.ask("Second message")
+
+    cmd = mock_popen.call_args[0][0]
+    assert "--continue" in cmd
+    assert "--resume" not in cmd
+    assert "--system-prompt" not in cmd
+
+
+@patch("sprachassistent.ai.claude_code.subprocess.Popen")
+def test_ask_resume_fallback_to_system_prompt(mock_popen, tmp_path):
+    """When --resume fails, retry with --system-prompt."""
+    backend = ClaudeCodeBackend(
+        working_directory=str(tmp_path),
+        system_prompt="Test prompt",
+        timeout=30,
+    )
+    # First call (--resume) fails, second call (--system-prompt) succeeds
+    fail_proc = _make_mock_process(returncode=1, stderr="No session")
+    ok_proc = _make_mock_process(stdout="Hello")
+    mock_popen.side_effect = [fail_proc, ok_proc]
+
+    result = backend.ask("Test message")
+
+    assert result == "Hello"
+    assert mock_popen.call_count == 2
+
+    # First call used --resume
+    first_cmd = mock_popen.call_args_list[0][0][0]
+    assert "--resume" in first_cmd
+
+    # Second call used --system-prompt
+    second_cmd = mock_popen.call_args_list[1][0][0]
+    assert "--system-prompt" in second_cmd
+    assert "--resume" not in second_cmd
+
+
+@patch("sprachassistent.ai.claude_code.subprocess.Popen")
+def test_ask_resume_fallback_also_fails_raises(mock_popen, tmp_path):
+    """When both --resume and --system-prompt fail, AIBackendError propagates."""
+    backend = ClaudeCodeBackend(
+        working_directory=str(tmp_path),
+        system_prompt="Test prompt",
+        timeout=30,
+    )
+    fail_proc1 = _make_mock_process(returncode=1, stderr="No session")
+    fail_proc2 = _make_mock_process(returncode=1, stderr="Also failed")
+    mock_popen.side_effect = [fail_proc1, fail_proc2]
+
+    with pytest.raises(AIBackendError, match="Also failed"):
+        backend.ask("Test message")
+
+    assert mock_popen.call_count == 2
+
+
+@patch("sprachassistent.ai.claude_code.subprocess.Popen")
+def test_reset_session_clears_resume(mock_popen, tmp_path):
+    """reset_session() clears _resume_on_next so next call uses --system-prompt."""
+    backend = ClaudeCodeBackend(
+        working_directory=str(tmp_path),
+        system_prompt="Test prompt",
+        timeout=30,
+    )
+    assert backend._resume_on_next is True
+
+    backend.reset_session()
+    assert backend._resume_on_next is False
+
+    mock_popen.return_value = _make_mock_process()
+    backend.ask("After reset")
+
+    cmd = mock_popen.call_args[0][0]
+    assert "--system-prompt" in cmd
+    assert "--resume" not in cmd
+
+
+@patch("sprachassistent.ai.claude_code.subprocess.Popen")
+def test_ask_no_fallback_when_not_resuming(mock_popen, backend):
+    """Non-resume failure does not trigger fallback retry."""
+    mock_popen.return_value = _make_mock_process(returncode=1, stderr="Error")
+
+    with pytest.raises(AIBackendError, match="Error"):
+        backend.ask("Test message")
+
+    # Only one call -- no retry
+    assert mock_popen.call_count == 1
