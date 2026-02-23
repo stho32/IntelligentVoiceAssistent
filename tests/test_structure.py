@@ -42,9 +42,9 @@ def test_utils_module_exists():
     assert (PROJECT_ROOT / "sprachassistent" / "utils" / "terminal_ui.py").is_file()
 
 
-def test_config_exists():
-    """Die Konfigurationsdatei muss existieren."""
-    assert (PROJECT_ROOT / "sprachassistent" / "config.yaml").is_file()
+def test_config_example_exists():
+    """Die Beispiel-Konfigurationsdatei muss existieren."""
+    assert (PROJECT_ROOT / "sprachassistent" / "config.example.yaml").is_file()
 
 
 def test_requirements_directory_exists():

@@ -1,0 +1,49 @@
+wake_word:
+  engine: openwakeword
+  model_name: "hey_jarvis"          # built-in model, no download needed
+  threshold: 0.3
+  inference_framework: onnx
+
+stt:
+  provider: openai
+  model: whisper-1
+  language: de
+
+ai:
+  backend: claude-code
+  working_directory: "~/Projekte/Training2"
+  source_directory: "~/Projekte/IntelligentVoiceAssistent"
+  system_prompt_path: "ai/prompts/system.md"
+  timeout: 300                       # seconds to wait for AI response
+  thinking_beep_interval: 3          # seconds between beeps while AI is thinking
+
+tts:
+  provider: openai
+  model: tts-1
+  voice: sage
+  speed: 1.0
+
+commands:
+  cancel_keywords:
+    - "abbrechen"
+    - "stopp"
+    - "vergiss es"
+    - "jarvis stopp"
+  reset_keywords:
+    - "neue konversation"
+    - "reset"
+    - "vergiss alles"
+    - "von vorne"
+  restart_keywords:
+    - "neustart"
+    - "starte neu"
+    - "jarvis neustart"
+
+audio:
+  sample_rate: 16000
+  channels: 1
+  chunk_size: 1280               # 80ms at 16kHz (wake-word frame size)
+  vad_chunk_size: 512            # 32ms at 16kHz (VAD frame size)
+  silence_threshold_sec: 1.5     # pause until recording stops
+  max_recording_sec: 30
+  vad_threshold: 0.5             # speech probability threshold

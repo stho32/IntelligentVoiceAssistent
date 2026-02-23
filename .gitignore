@@ -9,5 +9,8 @@ build/
 .venv/
 uv.lock
 
+# Local config (use config.example.yaml as template)
+sprachassistent/config.yaml
+
 # ONNX models (downloaded, not committed)
 models/*.onnx

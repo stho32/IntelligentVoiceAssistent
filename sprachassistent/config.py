@@ -10,6 +10,7 @@ import yaml
 
 _CONFIG_DIR = Path(__file__).parent
 _DEFAULT_CONFIG_PATH = _CONFIG_DIR / "config.yaml"
+_EXAMPLE_CONFIG_PATH = _CONFIG_DIR / "config.example.yaml"
 
 _config: dict | None = None
 
@@ -26,9 +27,15 @@ def load_config(path: Path | None = None) -> dict:
     Raises:
         FileNotFoundError: If the config file does not exist.
     """
-    config_path = path or _DEFAULT_CONFIG_PATH
-    if not config_path.exists():
-        raise FileNotFoundError(f"Config file not found: {config_path}")
+    if path is not None:
+        config_path = path
+    elif _DEFAULT_CONFIG_PATH.exists():
+        config_path = _DEFAULT_CONFIG_PATH
+    elif _EXAMPLE_CONFIG_PATH.exists():
+        config_path = _EXAMPLE_CONFIG_PATH
+    else:
+        raise FileNotFoundError(f"Config file not found: {_DEFAULT_CONFIG_PATH}")
+
 
     with open(config_path) as f:
         config = yaml.safe_load(f)
