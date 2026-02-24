@@ -30,3 +30,24 @@ def test_setup_logging_is_idempotent():
     setup_logging()
     count_2 = len(logging.getLogger("sprachassistent").handlers)
     assert count_2 == count_1
+
+
+def test_setup_logging_with_file(tmp_path):
+    """setup_logging with log_file creates a FileHandler."""
+    import sprachassistent.utils.logging as log_mod
+
+    log_mod._configured = False
+    root = logging.getLogger("sprachassistent")
+    original_handlers = list(root.handlers)
+
+    log_file = tmp_path / "test.log"
+    setup_logging(level=logging.DEBUG, log_file=str(log_file))
+
+    new_handlers = [h for h in root.handlers if h not in original_handlers]
+    assert len(new_handlers) == 1
+    assert isinstance(new_handlers[0], logging.FileHandler)
+
+    # Clean up: remove the handler we added and reset
+    root.removeHandler(new_handlers[0])
+    new_handlers[0].close()
+    log_mod._configured = False

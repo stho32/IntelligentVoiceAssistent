@@ -50,9 +50,7 @@ class TestCreateAudioInput:
         mock_module = MagicMock()
         mock_module.WindowsMicrophoneStream = mock_cls
 
-        with patch.dict(
-            sys.modules, {"sprachassistent.platform.windows.microphone": mock_module}
-        ):
+        with patch.dict(sys.modules, {"sprachassistent.platform.windows.microphone": mock_module}):
             result = create_audio_input(
                 rate=16000, channels=1, chunk_size=1280, platform="windows"
             )

@@ -76,9 +76,7 @@ class TestWindowsAudioPlayer:
         player = WindowsAudioPlayer()
         player.play_wav(wav_path)
 
-        mock_sd.OutputStream.assert_called_once_with(
-            samplerate=16000, channels=1, dtype="int16"
-        )
+        mock_sd.OutputStream.assert_called_once_with(samplerate=16000, channels=1, dtype="int16")
         mock_stream.start.assert_called_once()
         assert mock_stream.write.call_count >= 1
         mock_stream.stop.assert_called_once()
@@ -97,9 +95,7 @@ class TestWindowsAudioPlayer:
         data = b"\x00\x01" * 512
         player.play_pcm(data, rate=24000, channels=1)
 
-        mock_sd.OutputStream.assert_called_once_with(
-            samplerate=24000, channels=1, dtype="int16"
-        )
+        mock_sd.OutputStream.assert_called_once_with(samplerate=24000, channels=1, dtype="int16")
         mock_stream.start.assert_called_once()
         mock_stream.write.assert_called_once()
         mock_stream.stop.assert_called_once()

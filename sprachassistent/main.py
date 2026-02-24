@@ -233,7 +233,6 @@ def run_loop(
             continue
 
         ui.set_transcription(text)
-        ui.log(f"Transcription: {text}")
 
         # Check for cancel command
         if cancel_keywords and _is_cancel_command(text, cancel_keywords):
@@ -357,7 +356,7 @@ def run_loop(
         response = ai_result["response"]
 
         ui.set_response(response)
-        ui.log(f"Response: {response}")
+        ui.print_conversation_turn()
 
         # Phase 5: Speak response
         ui.set_state(AssistantState.SPEAKING)
@@ -389,13 +388,20 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    setup_logging(level=logging.DEBUG)
-
+    # Load config first, then set up file-based logging from config values.
+    # If config loading fails, fall back to stderr logging.
     try:
         config = get_config()
     except Exception as e:
+        setup_logging(level=logging.DEBUG)
         log.error("Failed to load config: %s", e)
         raise SystemExit(1) from e
+
+    log_cfg = config.get("logging", {})
+    log_file = log_cfg.get("file")
+    log_level_name = log_cfg.get("level", "DEBUG")
+    log_level = getattr(logging, log_level_name.upper(), logging.DEBUG)
+    setup_logging(level=log_level, log_file=log_file)
 
     audio_cfg = config["audio"]
 

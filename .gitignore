@@ -12,5 +12,8 @@ uv.lock
 # Local config (use config.example.yaml as template)
 sprachassistent/config.yaml
 
+# Log files
+*.log
+
 # ONNX models (downloaded, not committed)
 models/*.onnx

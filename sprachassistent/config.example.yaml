@@ -39,6 +39,10 @@ commands:
     - "starte neu"
     - "jarvis neustart"
 
+logging:
+  file: "jarvis.log"               # relative to working dir or absolute path
+  level: DEBUG
+
 audio:
   sample_rate: 16000
   channels: 1
