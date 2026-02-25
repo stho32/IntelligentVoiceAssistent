@@ -13,6 +13,8 @@ from sprachassistent.ai.claude_code import ClaudeCodeBackend
 from sprachassistent.audio.recorder import SpeechRecorder
 from sprachassistent.audio.wake_word import WakeWordDetector
 from sprachassistent.config import get_config
+from sprachassistent.input.keyboard import KeyboardMonitor
+from sprachassistent.input.text_input import TextInput
 from sprachassistent.platform.factory import (
     create_audio_input,
     create_audio_output,
@@ -155,6 +157,8 @@ def run_loop(
     cancel_keywords: list[str] | None = None,
     reset_keywords: list[str] | None = None,
     restart_keywords: list[str] | None = None,
+    keyboard_monitor: KeyboardMonitor | None = None,
+    text_input: TextInput | None = None,
 ) -> None:
     """Run the main assistant loop.
 
@@ -167,6 +171,8 @@ def run_loop(
         cancel_keywords: List of keywords that cancel the current command.
         reset_keywords: List of keywords that reset the conversation session.
         restart_keywords: List of keywords that restart the assistant process.
+        keyboard_monitor: Optional keyboard monitor for text input activation.
+        text_input: Optional text input handler for keyboard-based input.
     """
     if cancel_keywords is None:
         cancel_keywords = []
@@ -184,54 +190,75 @@ def run_loop(
     ui.log("Assistant ready. Say 'Hey Jarvis' to activate.")
 
     while True:
-        # Phase 1: Listen for wake word
-        audio_chunk = mic.read_chunk()
-        if not wake_word.process(audio_chunk):
-            continue
+        text = None
+        from_keyboard = False
 
-        # Wake word detected
-        ui.log("Wake word detected!")
-        wake_word.reset()
+        # Keyboard check (non-blocking) — before mic.read_chunk()
+        if keyboard_monitor is not None and text_input is not None:
+            key = keyboard_monitor.check()
+            if key is not None:
+                ui.set_state(AssistantState.TYPING)
+                keyboard_monitor.pause()
+                try:
+                    text = text_input.collect(initial_char=key, ui=ui)
+                finally:
+                    keyboard_monitor.resume()
+                if not text or not text.strip():
+                    ui.set_state(AssistantState.LISTENING)
+                    continue
+                from_keyboard = True
 
-        # Play confirmation sound
-        if _DING_PATH.exists():
-            player.play_wav(_DING_PATH)
+        if text is None:
+            # Phase 1: Listen for wake word (normal voice path)
+            audio_chunk = mic.read_chunk()
+            if not wake_word.process(audio_chunk):
+                continue
 
-        # Phase 2: Record speech
-        ui.set_state(AssistantState.RECORDING)
-        ui.set_transcription("")
-        ui.set_response("")
-        recorder.start()
+            # Wake word detected
+            ui.log("Wake word detected!")
+            wake_word.reset()
 
-        while recorder.process_chunk(mic.read_chunk()):
-            pass
+            # Play confirmation sound
+            if _DING_PATH.exists():
+                player.play_wav(_DING_PATH)
 
-        recorded_audio = recorder.get_audio()
-        if not recorded_audio:
-            ui.set_state(AssistantState.LISTENING)
-            continue
+            # Phase 2: Record speech
+            ui.set_state(AssistantState.RECORDING)
+            ui.set_transcription("")
+            ui.set_response("")
+            recorder.start()
 
-        # Signal: Recording done, now processing
-        if _PROCESSING_PATH.exists():
-            player.play_wav(_PROCESSING_PATH)
+            while recorder.process_chunk(mic.read_chunk()):
+                pass
 
-        # Phase 3: Transcribe
-        ui.set_state(AssistantState.PROCESSING)
-        try:
-            text = transcriber.transcribe(recorded_audio)
-        except Exception as e:
-            ui.set_state(AssistantState.ERROR)
-            ui.log(f"STT error: {e}")
-            _speak_error(tts, player, "stt", ui)
-            if _READY_PATH.exists():
-                player.play_wav(_READY_PATH)
-            ui.set_state(AssistantState.LISTENING)
-            continue
+            recorded_audio = recorder.get_audio()
+            if not recorded_audio:
+                ui.set_state(AssistantState.LISTENING)
+                continue
 
-        if not text.strip():
-            ui.set_state(AssistantState.LISTENING)
-            continue
+            # Signal: Recording done, now processing
+            if _PROCESSING_PATH.exists():
+                player.play_wav(_PROCESSING_PATH)
 
+            # Phase 3: Transcribe
+            ui.set_state(AssistantState.PROCESSING)
+            try:
+                text = transcriber.transcribe(recorded_audio)
+            except Exception as e:
+                ui.set_state(AssistantState.ERROR)
+                ui.log(f"STT error: {e}")
+                _speak_error(tts, player, "stt", ui)
+                if _READY_PATH.exists():
+                    player.play_wav(_READY_PATH)
+                ui.set_state(AssistantState.LISTENING)
+                continue
+
+            if not text.strip():
+                ui.set_state(AssistantState.LISTENING)
+                continue
+
+        # === COMMON PATH (voice + keyboard) ===
+        ui.set_input_source("keyboard" if from_keyboard else "voice")
         ui.set_transcription(text)
 
         # Check for cancel command
@@ -375,6 +402,7 @@ def run_loop(
             player.play_wav(_READY_PATH)
 
         # Back to listening
+        ui.set_input_source("voice")
         ui.set_state(AssistantState.LISTENING)
 
 
@@ -419,7 +447,9 @@ def main() -> None:
         ) as mic,
         create_audio_output() as player,
         TerminalUI() as ui,
+        KeyboardMonitor() as keyboard_monitor,
     ):
+        text_input = TextInput()
         try:
             beep_interval = config["ai"].get("thinking_beep_interval", 3)
             commands_cfg = config.get("commands", {})
@@ -435,6 +465,8 @@ def main() -> None:
                 cancel_keywords=cancel_kw,
                 reset_keywords=reset_kw,
                 restart_keywords=restart_kw,
+                keyboard_monitor=keyboard_monitor,
+                text_input=text_input,
             )
         except KeyboardInterrupt:
             ui.log("Shutting down...")

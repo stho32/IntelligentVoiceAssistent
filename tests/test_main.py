@@ -695,3 +695,199 @@ def test_main_new_session_flag(mock_restart):
         mock_create.assert_called_once()
         kwargs = mock_create.call_args.kwargs
         assert kwargs["resume_session"] is False
+
+
+def test_text_input_bypasses_recording_and_stt():
+    """Keyboard text input skips wake word, recording, and STT."""
+    components = _make_mock_components()
+    mic = MagicMock()
+    player = MagicMock()
+    ui = MagicMock()
+
+    keyboard_monitor = MagicMock()
+    text_input = MagicMock()
+
+    # First check: key pressed, second check (after AI cycle): raise to exit
+    call_count = 0
+
+    def check_side_effect():
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return "h"
+        raise KeyboardInterrupt
+
+    keyboard_monitor.check.side_effect = check_side_effect
+    text_input.collect.return_value = "hello world"
+    components["ai_backend"].ask.return_value = "Hi there!"
+
+    with pytest.raises(KeyboardInterrupt):
+        run_loop(
+            components,
+            mic,
+            player,
+            ui,
+            keyboard_monitor=keyboard_monitor,
+            text_input=text_input,
+        )
+
+    # Wake word, recorder, transcriber should NOT be used
+    components["wake_word"].process.assert_not_called()
+    components["recorder"].start.assert_not_called()
+    components["transcriber"].transcribe.assert_not_called()
+
+    # AI should receive the typed text
+    components["ai_backend"].ask.assert_called_once_with("hello world")
+    # TTS should speak the response
+    components["tts"].speak.assert_called_once()
+
+    # Keyboard monitor should be paused/resumed
+    keyboard_monitor.pause.assert_called_once()
+    keyboard_monitor.resume.assert_called_once()
+
+
+def test_text_input_cancel_returns_to_listening():
+    """Cancelled text input returns to LISTENING without calling AI."""
+    components = _make_mock_components()
+    mic = MagicMock()
+    player = MagicMock()
+    ui = MagicMock()
+
+    keyboard_monitor = MagicMock()
+    text_input = MagicMock()
+
+    call_count = 0
+
+    def check_side_effect():
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return "\x1b"  # Esc key
+        raise KeyboardInterrupt
+
+    keyboard_monitor.check.side_effect = check_side_effect
+    text_input.collect.return_value = None  # Cancelled
+
+    with pytest.raises(KeyboardInterrupt):
+        run_loop(
+            components,
+            mic,
+            player,
+            ui,
+            keyboard_monitor=keyboard_monitor,
+            text_input=text_input,
+        )
+
+    components["ai_backend"].ask.assert_not_called()
+    # Should return to LISTENING
+    state_calls = [c.args[0] for c in ui.set_state.call_args_list]
+    assert AssistantState.TYPING in state_calls
+    assert state_calls[-1] == AssistantState.LISTENING
+
+
+def test_text_input_commands_recognized():
+    """Cancel/reset/restart commands work with keyboard input too."""
+    components = _make_mock_components()
+    mic = MagicMock()
+    player = MagicMock()
+    ui = MagicMock()
+
+    keyboard_monitor = MagicMock()
+    text_input = MagicMock()
+
+    call_count = 0
+
+    def check_side_effect():
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return "s"
+        raise KeyboardInterrupt
+
+    keyboard_monitor.check.side_effect = check_side_effect
+    text_input.collect.return_value = "stopp"
+
+    with pytest.raises(KeyboardInterrupt):
+        run_loop(
+            components,
+            mic,
+            player,
+            ui,
+            cancel_keywords=["stopp"],
+            keyboard_monitor=keyboard_monitor,
+            text_input=text_input,
+        )
+
+    # Cancel should fire, AI should NOT be called
+    components["ai_backend"].ask.assert_not_called()
+    components["tts"].speak.assert_called_once()
+    spoken_text = components["tts"].speak.call_args[0][0]
+    assert "Alles klar" in spoken_text
+
+
+def test_text_input_sets_keyboard_source():
+    """Keyboard input sets input_source to 'keyboard'."""
+    components = _make_mock_components()
+    mic = MagicMock()
+    player = MagicMock()
+    ui = MagicMock()
+
+    keyboard_monitor = MagicMock()
+    text_input = MagicMock()
+
+    call_count = 0
+
+    def check_side_effect():
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return "t"
+        raise KeyboardInterrupt
+
+    keyboard_monitor.check.side_effect = check_side_effect
+    text_input.collect.return_value = "test message"
+    components["ai_backend"].ask.return_value = "Response"
+
+    with pytest.raises(KeyboardInterrupt):
+        run_loop(
+            components,
+            mic,
+            player,
+            ui,
+            keyboard_monitor=keyboard_monitor,
+            text_input=text_input,
+        )
+
+    # Should have set input_source to "keyboard" and then back to "voice"
+    source_calls = [c.args[0] for c in ui.set_input_source.call_args_list]
+    assert "keyboard" in source_calls
+    assert source_calls[-1] == "voice"
+
+
+def test_backward_compat_without_keyboard_monitor():
+    """run_loop works without keyboard_monitor (backward compat)."""
+    components = _make_mock_components()
+    mic = MagicMock()
+    player = MagicMock()
+    ui = MagicMock()
+
+    call_count = 0
+
+    def wake_word_side_effect(chunk):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return True
+        raise KeyboardInterrupt
+
+    components["wake_word"].process.side_effect = wake_word_side_effect
+    components["recorder"].process_chunk.return_value = False
+    components["recorder"].get_audio.return_value = b"\x00" * 3200
+    components["transcriber"].transcribe.return_value = "Hello"
+    components["ai_backend"].ask.return_value = "Hi!"
+
+    with pytest.raises(KeyboardInterrupt):
+        run_loop(components, mic, player, ui)
+
+    # Normal voice path should work without keyboard_monitor
+    components["ai_backend"].ask.assert_called_once_with("Hello")

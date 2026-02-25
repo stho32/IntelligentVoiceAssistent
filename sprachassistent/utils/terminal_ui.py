@@ -23,15 +23,23 @@ class AssistantState(Enum):
     PROCESSING = "processing"
     SPEAKING = "speaking"
     ERROR = "error"
+    TYPING = "typing"
 
 
 _STATE_CONFIG = {
     AssistantState.IDLE: ("yellow", "Waiting for wake word..."),
-    AssistantState.LISTENING: ("green", "Listening for 'Hey Jarvis'..."),
+    AssistantState.LISTENING: (
+        "green",
+        "Listening for 'Hey Jarvis'... (or press any key to type)",
+    ),
     AssistantState.RECORDING: ("bright_green", "Recording speech..."),
     AssistantState.PROCESSING: ("blue", "Processing..."),
     AssistantState.SPEAKING: ("cyan", "Speaking..."),
     AssistantState.ERROR: ("red", "Error"),
+    AssistantState.TYPING: (
+        "magenta",
+        "Texteingabe... (leere Zeile = senden, Esc = abbrechen)",
+    ),
 }
 
 
@@ -59,6 +67,7 @@ class TerminalUI:
         self._transcription_time: str = ""
         self._response_time: str = ""
         self._live: Live | None = None
+        self._input_source: str = "voice"
 
     def __enter__(self) -> "TerminalUI":
         self._live = Live(
@@ -80,6 +89,10 @@ class TerminalUI:
         """Update the displayed state."""
         self._state = state
         self._refresh()
+
+    def set_input_source(self, source: str) -> None:
+        """Set the input source for conversation display ('voice' or 'keyboard')."""
+        self._input_source = source
 
     def set_transcription(self, text: str) -> None:
         """Store user transcription with timestamp."""
@@ -105,7 +118,10 @@ class TerminalUI:
         if self._transcription:
             user_line = Text()
             user_line.append(f"[{self._transcription_time}] ", style="dim")
-            user_line.append("Du: ", style="bold green")
+            if self._input_source == "keyboard":
+                user_line.append("Du [Tastatur]: ", style="bold green")
+            else:
+                user_line.append("Du: ", style="bold green")
             user_line.append(self._transcription)
             console.print(user_line)
             console.print()
@@ -117,6 +133,16 @@ class TerminalUI:
             console.print(header)
             console.print(Markdown(self._response))
             console.print()
+
+    def stop_live(self) -> None:
+        """Temporarily stop the Live display for text input coordination."""
+        if self._live is not None:
+            self._live.stop()
+
+    def start_live(self) -> None:
+        """Restart the Live display after text input."""
+        if self._live is not None:
+            self._live.start()
 
     def log(self, message: str) -> None:
         """Print a system message above the status display."""

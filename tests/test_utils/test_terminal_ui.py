@@ -16,11 +16,12 @@ def test_assistant_state_values():
     assert AssistantState.PROCESSING.value == "processing"
     assert AssistantState.SPEAKING.value == "speaking"
     assert AssistantState.ERROR.value == "error"
+    assert AssistantState.TYPING.value == "typing"
 
 
 def test_state_enum_has_all_states():
-    """Enum has exactly 6 states."""
-    assert len(AssistantState) == 6
+    """Enum has exactly 7 states."""
+    assert len(AssistantState) == 7
 
 
 @patch("sprachassistent.utils.terminal_ui.Live")
@@ -144,3 +145,98 @@ def test_log_uses_print_not_log(mock_live_cls):
 
     mock_console.print.assert_called()
     mock_console.log.assert_not_called()
+
+
+def test_typing_state_in_render():
+    """TYPING state renders correctly in the status panel."""
+    ui = TerminalUI()
+    ui.set_state(AssistantState.TYPING)
+    panel = ui._render()
+    content = panel.renderable
+    assert "Texteingabe" in content.plain
+
+
+def test_listening_hint_includes_key_press():
+    """LISTENING label includes hint about pressing a key to type."""
+    ui = TerminalUI()
+    ui.set_state(AssistantState.LISTENING)
+    panel = ui._render()
+    content = panel.renderable
+    assert "press any key to type" in content.plain
+
+
+@patch("sprachassistent.utils.terminal_ui.Live")
+def test_keyboard_marker_in_conversation(mock_live_cls):
+    """print_conversation_turn shows [Tastatur] when input_source is keyboard."""
+    mock_live = MagicMock()
+    mock_console = MagicMock()
+    mock_live.console = mock_console
+    mock_live_cls.return_value = mock_live
+
+    with TerminalUI() as ui:
+        ui.set_input_source("keyboard")
+        ui.set_transcription("~/some/path")
+        ui.set_response("Got it.")
+        ui.print_conversation_turn()
+
+    print_calls = mock_console.print.call_args_list
+    first_arg = print_calls[0][0][0]
+    assert isinstance(first_arg, Text)
+    assert "[Tastatur]" in first_arg.plain
+
+
+@patch("sprachassistent.utils.terminal_ui.Live")
+def test_voice_marker_not_shown_for_voice(mock_live_cls):
+    """print_conversation_turn does NOT show [Tastatur] for voice input."""
+    mock_live = MagicMock()
+    mock_console = MagicMock()
+    mock_live.console = mock_console
+    mock_live_cls.return_value = mock_live
+
+    with TerminalUI() as ui:
+        ui.set_input_source("voice")
+        ui.set_transcription("Hallo Jarvis")
+        ui.set_response("Hallo!")
+        ui.print_conversation_turn()
+
+    print_calls = mock_console.print.call_args_list
+    first_arg = print_calls[0][0][0]
+    assert isinstance(first_arg, Text)
+    assert "[Tastatur]" not in first_arg.plain
+    assert "Du:" in first_arg.plain
+
+
+@patch("sprachassistent.utils.terminal_ui.Live")
+def test_stop_live(mock_live_cls):
+    """stop_live() stops the Live display."""
+    mock_live = MagicMock()
+    mock_live_cls.return_value = mock_live
+
+    with TerminalUI() as ui:
+        mock_live.stop.reset_mock()
+        ui.stop_live()
+        mock_live.stop.assert_called_once()
+
+
+@patch("sprachassistent.utils.terminal_ui.Live")
+def test_start_live(mock_live_cls):
+    """start_live() restarts the Live display."""
+    mock_live = MagicMock()
+    mock_live_cls.return_value = mock_live
+
+    with TerminalUI() as ui:
+        ui.start_live()
+        # start is called once in __enter__ and once by start_live
+        assert mock_live.start.call_count == 2
+
+
+def test_stop_live_without_context():
+    """stop_live() is safe to call without entering context."""
+    ui = TerminalUI()
+    ui.stop_live()  # Should not raise
+
+
+def test_start_live_without_context():
+    """start_live() is safe to call without entering context."""
+    ui = TerminalUI()
+    ui.start_live()  # Should not raise
