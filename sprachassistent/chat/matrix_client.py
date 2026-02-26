@@ -20,40 +20,48 @@ log = get_logger("chat.matrix")
 class MatrixBridge:
     """Async Matrix client that bridges messages to/from the main thread.
 
+    Supports two authentication modes:
+    - Password login: provide ``password`` to call the login API on start.
+    - Access token: provide ``access_token`` for pre-authenticated sessions.
+
     Args:
         homeserver: Matrix homeserver URL (e.g. "https://matrix.org").
         user_id: Bot's Matrix user ID (e.g. "@jarvis:matrix.org").
-        access_token: Access token for authentication (optional if password given).
         room_id: The Matrix room to operate in.
         allowed_users: List of Matrix user IDs allowed to interact with the bot.
         store_path: Path to store E2E encryption keys.
         incoming_queue: Queue for messages from Matrix -> main thread.
         outgoing_queue: Queue for responses from main thread -> Matrix.
         password: Password for login-based authentication (optional if access_token given).
+        access_token: Pre-existing access token (optional if password given).
+        transcriber: Optional transcriber for audio message support.
     """
 
     def __init__(
         self,
         homeserver: str,
         user_id: str,
-        access_token: str,
         room_id: str,
         allowed_users: list[str],
         store_path: str,
         incoming_queue: queue.Queue,
         outgoing_queue: queue.Queue,
+        *,
         password: str = "",
+        access_token: str = "",
         transcriber: Any = None,
     ):
+        if not access_token and not password:
+            raise MatrixChatError("Either password or access_token is required")
         self.homeserver = homeserver
         self.user_id = user_id
         self.access_token = access_token
+        self.password = password
         self.room_id = room_id
         self.allowed_users = allowed_users
         self.store_path = store_path
         self.incoming_queue = incoming_queue
         self.outgoing_queue = outgoing_queue
-        self.password = password
         self._transcriber = transcriber
         self._stop_event = asyncio.Event()
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -82,6 +90,7 @@ class MatrixBridge:
             if isinstance(resp, nio.LoginError):
                 raise MatrixChatError(f"Matrix login failed: {resp.message}")
             log.info("Logged in as %s (device %s)", resp.user_id, resp.device_id)
+            self.access_token = resp.access_token
         else:
             raise MatrixChatError("No access_token or password provided")
 
@@ -201,8 +210,6 @@ class MatrixBridge:
 
     async def _on_audio_message(self, room: Any, event: Any) -> None:
         """Handle incoming audio messages (voice notes)."""
-        import nio
-
         _MAX_FILE_SIZE = 25 * 1024 * 1024  # 25 MB (Whisper API limit)
 
         if room.room_id != self.room_id:
@@ -228,6 +235,8 @@ class MatrixBridge:
                 "Audio-Datei ist zu gross (max. 25 MB).",
             )
             return
+
+        import nio
 
         # Download audio
         try:
@@ -363,13 +372,13 @@ def start_matrix_thread(
     bridge = MatrixBridge(
         homeserver=config["homeserver"],
         user_id=config["user_id"],
-        access_token=access_token,
         room_id=config["room_id"],
         allowed_users=config.get("allowed_users", []),
         store_path=config.get("store_path", "~/.config/jarvis/matrix_store"),
         incoming_queue=incoming_queue,
         outgoing_queue=outgoing_queue,
         password=password,
+        access_token=access_token,
         transcriber=transcriber,
     )
 

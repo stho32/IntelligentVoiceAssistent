@@ -30,6 +30,9 @@ def _make_bridge(
     allowed_users=_SENTINEL,
     room_id="!room:matrix.org",
     user_id="@bot:matrix.org",
+    *,
+    password="",
+    access_token="test_token",
 ):
     """Create a MatrixBridge with default test values."""
     if allowed_users is _SENTINEL:
@@ -37,12 +40,13 @@ def _make_bridge(
     return MatrixBridge(
         homeserver="https://matrix.org",
         user_id=user_id,
-        access_token="test_token",
         room_id=room_id,
         allowed_users=allowed_users,
         store_path="/tmp/test_store",
         incoming_queue=incoming or queue.Queue(),
         outgoing_queue=outgoing or queue.Queue(),
+        password=password,
+        access_token=access_token,
     )
 
 
@@ -181,7 +185,8 @@ class TestStartMatrixThread:
             "allowed_users": ["@user:matrix.org"],
         }
         with patch.dict("os.environ", {}, clear=True):
-            with pytest.raises(MatrixChatError, match="access_token"):
+            pattern = "access_token.*password|password.*access_token"
+            with pytest.raises(MatrixChatError, match=pattern):
                 start_matrix_thread(config, queue.Queue(), queue.Queue())
 
     @patch("sprachassistent.chat.matrix_client.MatrixBridge")
@@ -265,18 +270,19 @@ class TestPasswordLogin:
         bridge = MatrixBridge(
             homeserver="https://matrix.org",
             user_id="@bot:matrix.org",
-            access_token="",
             room_id="!room:matrix.org",
             allowed_users=[],
             store_path="/tmp/test_store",
             incoming_queue=queue.Queue(),
             outgoing_queue=queue.Queue(),
             password="secret",
+            access_token="",
         )
 
         mock_login_resp = MagicMock()
         mock_login_resp.user_id = "@bot:matrix.org"
         mock_login_resp.device_id = "JARVIS"
+        mock_login_resp.access_token = "obtained_token"
 
         mock_nio = MagicMock()
         mock_nio.LoginError = type("LoginError", (), {})
@@ -308,13 +314,13 @@ class TestPasswordLogin:
         bridge = MatrixBridge(
             homeserver="https://matrix.org",
             user_id="@bot:matrix.org",
-            access_token="",
             room_id="!room:matrix.org",
             allowed_users=[],
             store_path="/tmp/test_store",
             incoming_queue=queue.Queue(),
             outgoing_queue=queue.Queue(),
             password="wrong",
+            access_token="",
         )
 
         mock_nio = MagicMock()
@@ -361,6 +367,19 @@ class TestPasswordLogin:
 
         asyncio.run(run())
         mock_client.login.assert_not_called()
+
+    def test_no_auth_raises_on_construction(self):
+        """Constructing MatrixBridge without any auth raises."""
+        with pytest.raises(MatrixChatError, match="password.*access_token"):
+            MatrixBridge(
+                homeserver="https://matrix.org",
+                user_id="@bot:matrix.org",
+                room_id="!room:matrix.org",
+                allowed_users=[],
+                store_path="/tmp",
+                incoming_queue=queue.Queue(),
+                outgoing_queue=queue.Queue(),
+            )
 
 
 class TestSyncLoop:

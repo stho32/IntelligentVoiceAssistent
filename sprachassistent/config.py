@@ -74,8 +74,8 @@ def _validate_matrix_config(config: dict) -> None:
     """Validate the optional matrix configuration section.
 
     If the 'matrix' section is absent, nothing happens (Matrix is optional).
-    If present, required fields are checked and access_token must be in
-    config or the MATRIX_ACCESS_TOKEN environment variable.
+    If present, required fields are checked and either password or access_token
+    must be available (via config or environment variable).
 
     Raises:
         ConfigError: If the matrix section is present but incomplete.
