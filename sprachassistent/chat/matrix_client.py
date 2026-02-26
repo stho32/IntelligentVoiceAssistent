@@ -273,6 +273,8 @@ class MatrixBridge:
             )
             return
 
+        text = self._transcriber.filter_transcript(text)
+
         if not text or not text.strip():
             await self._send_text(
                 room.room_id,

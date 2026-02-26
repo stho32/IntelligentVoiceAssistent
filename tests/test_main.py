@@ -43,10 +43,13 @@ def _make_config():
 
 def _make_mock_components():
     """Create mock components for the loop."""
+    transcriber = MagicMock()
+    # filter_transcript should pass text through by default
+    transcriber.filter_transcript.side_effect = lambda text: text
     return {
         "wake_word": MagicMock(),
         "recorder": MagicMock(),
-        "transcriber": MagicMock(),
+        "transcriber": transcriber,
         "ai_backend": MagicMock(),
         "tts": MagicMock(),
     }
@@ -1108,3 +1111,81 @@ def test_create_components_chat_only(mock_tts, mock_ai, mock_stt, mock_rec, mock
     mock_rec.assert_not_called()
     mock_stt.assert_not_called()
     mock_tts.assert_not_called()
+
+
+# --- Transcript filtering tests ---
+
+
+def test_short_recording_skipped():
+    """Recording shorter than min_recording_sec is not transcribed."""
+    components = _make_mock_components()
+    mic = MagicMock()
+    player = MagicMock()
+    ui = MagicMock()
+
+    call_count = 0
+
+    def wake_word_side_effect(chunk):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return True
+        raise KeyboardInterrupt
+
+    components["wake_word"].process.side_effect = wake_word_side_effect
+    components["recorder"].process_chunk.return_value = False
+    # 1 second of audio at 16kHz, 16-bit = 32000 bytes (< 2s threshold)
+    components["recorder"].get_audio.return_value = b"\x00" * 32000
+
+    with pytest.raises(KeyboardInterrupt):
+        run_loop(
+            components,
+            mic,
+            player,
+            ui,
+            sample_rate=16000,
+            min_recording_sec=2.0,
+        )
+
+    # Transcriber should NOT be called
+    components["transcriber"].transcribe.assert_not_called()
+    components["ai_backend"].ask.assert_not_called()
+
+
+def test_recording_at_min_duration_transcribed():
+    """Recording exactly at min_recording_sec threshold is processed."""
+    components = _make_mock_components()
+    mic = MagicMock()
+    player = MagicMock()
+    ui = MagicMock()
+
+    call_count = 0
+
+    def wake_word_side_effect(chunk):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return True
+        raise KeyboardInterrupt
+
+    components["wake_word"].process.side_effect = wake_word_side_effect
+    components["recorder"].process_chunk.return_value = False
+    # Exactly 2 seconds at 16kHz, 16-bit = 64000 bytes
+    components["recorder"].get_audio.return_value = b"\x00" * 64000
+    components["transcriber"].transcribe.return_value = "Hallo"
+    components["transcriber"].filter_transcript.return_value = "Hallo"
+    components["ai_backend"].ask.return_value = "Hi!"
+
+    with pytest.raises(KeyboardInterrupt):
+        run_loop(
+            components,
+            mic,
+            player,
+            ui,
+            sample_rate=16000,
+            min_recording_sec=2.0,
+        )
+
+    # Transcriber SHOULD be called
+    components["transcriber"].transcribe.assert_called_once()
+    components["ai_backend"].ask.assert_called_once()

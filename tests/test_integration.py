@@ -34,10 +34,12 @@ def test_ding_wav_is_valid():
 
 def _make_mock_components():
     """Create mock components for integration tests."""
+    transcriber = MagicMock()
+    transcriber.filter_transcript.side_effect = lambda text: text
     return {
         "wake_word": MagicMock(),
         "recorder": MagicMock(),
-        "transcriber": MagicMock(),
+        "transcriber": transcriber,
         "ai_backend": MagicMock(),
         "tts": MagicMock(),
     }

@@ -44,10 +44,12 @@ def _make_chat_msg(text="Hello"):
 
 def _make_mock_components():
     """Create mock components for the loop."""
+    transcriber = MagicMock()
+    transcriber.filter_transcript.side_effect = lambda text: text
     return {
         "wake_word": MagicMock(),
         "recorder": MagicMock(),
-        "transcriber": MagicMock(),
+        "transcriber": transcriber,
         "ai_backend": MagicMock(),
         "tts": MagicMock(),
     }

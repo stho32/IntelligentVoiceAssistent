@@ -160,6 +160,7 @@ def create_components(
                 "transcriber": WhisperTranscriber(
                     model=stt_cfg["model"],
                     language=stt_cfg["language"],
+                    filter_phrases=stt_cfg.get("filter_phrases", []),
                 ),
                 "tts": OpenAITextToSpeech(
                     model=tts_cfg["model"],
@@ -238,6 +239,8 @@ def run_loop(
     text_input: TextInput | None = None,
     matrix_incoming: queue.Queue | None = None,
     matrix_outgoing: queue.Queue | None = None,
+    sample_rate: int = 16000,
+    min_recording_sec: float = 0.0,
 ) -> None:
     """Run the main assistant loop.
 
@@ -254,6 +257,8 @@ def run_loop(
         text_input: Optional text input handler for keyboard-based input.
         matrix_incoming: Optional queue for incoming Matrix chat messages.
         matrix_outgoing: Optional queue for outgoing Matrix chat responses.
+        sample_rate: Audio sample rate in Hz (for duration calculation).
+        min_recording_sec: Minimum recording duration; shorter recordings are ignored.
     """
     if cancel_keywords is None:
         cancel_keywords = []
@@ -331,6 +336,18 @@ def run_loop(
                 ui.set_state(AssistantState.LISTENING)
                 continue
 
+            # Check minimum recording duration
+            if min_recording_sec > 0:
+                duration = len(recorded_audio) / (sample_rate * 2)
+                if duration < min_recording_sec:
+                    log.info(
+                        "Recording too short (%.1fs < %.1fs), ignoring.",
+                        duration,
+                        min_recording_sec,
+                    )
+                    ui.set_state(AssistantState.LISTENING)
+                    continue
+
             # Signal: Recording done, now processing
             if _PROCESSING_PATH.exists():
                 player.play_wav(_PROCESSING_PATH)
@@ -347,6 +364,8 @@ def run_loop(
                     player.play_wav(_READY_PATH)
                 ui.set_state(AssistantState.LISTENING)
                 continue
+
+            text = transcriber.filter_transcript(text)
 
             if not text.strip():
                 ui.set_state(AssistantState.LISTENING)
@@ -592,6 +611,7 @@ def main() -> None:
             matrix_transcriber = WhisperTranscriber(
                 model=stt_cfg["model"],
                 language=stt_cfg["language"],
+                filter_phrases=stt_cfg.get("filter_phrases", []),
             )
             _matrix_thread, matrix_bridge = start_matrix_thread(
                 matrix_cfg,
@@ -681,6 +701,8 @@ def main() -> None:
                 text_input=text_input,
                 matrix_incoming=matrix_incoming,
                 matrix_outgoing=matrix_outgoing,
+                sample_rate=audio_cfg["sample_rate"],
+                min_recording_sec=audio_cfg.get("min_recording_sec", 0.0),
             )
         except KeyboardInterrupt:
             ui.log("Shutting down...")

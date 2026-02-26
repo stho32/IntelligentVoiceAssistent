@@ -474,6 +474,7 @@ class TestOnAudioMessage:
         incoming = queue.Queue()
         transcriber = MagicMock()
         transcriber.transcribe_file.return_value = "Hallo Welt"
+        transcriber.filter_transcript.side_effect = lambda text: text
 
         bridge = _make_audio_bridge(incoming=incoming, transcriber=transcriber)
         download_resp = MagicMock()
@@ -625,6 +626,7 @@ class TestOnAudioMessage:
         incoming = queue.Queue()
         transcriber = MagicMock()
         transcriber.transcribe_file.return_value = "   "
+        transcriber.filter_transcript.side_effect = lambda text: text.strip()
         bridge = _make_audio_bridge(incoming=incoming, transcriber=transcriber)
 
         download_resp = MagicMock()
@@ -674,3 +676,50 @@ class TestOnAudioMessage:
         # Verify add_event_callback was called only once (for text, not audio)
         calls = mock_client.add_event_callback.call_args_list
         assert len(calls) == 1
+
+    def test_audio_transcript_filtered(self):
+        """Artifact phrase is removed from transcript before enqueueing."""
+        incoming = queue.Queue()
+        transcriber = MagicMock()
+        transcriber.transcribe_file.return_value = "Hallo Welt Untertitel der Amara.org-Community"
+        transcriber.filter_transcript.return_value = "Hallo Welt"
+
+        bridge = _make_audio_bridge(incoming=incoming, transcriber=transcriber)
+        download_resp = MagicMock()
+        download_resp.body = b"\x00\x01\x02"
+        bridge._client.download = AsyncMock(return_value=download_resp)
+
+        room = _make_room()
+        event = _make_audio_event()
+
+        with patch.dict("sys.modules", {"nio": _make_nio_mock()}):
+            asyncio.run(bridge._on_audio_message(room, event))
+
+        transcriber.filter_transcript.assert_called_once_with(
+            "Hallo Welt Untertitel der Amara.org-Community"
+        )
+        msg = incoming.get_nowait()
+        assert msg.text == "Hallo Welt"
+
+    def test_audio_transcript_empty_after_filter(self):
+        """When filtering removes all text, info message is sent, no ChatMessage."""
+        incoming = queue.Queue()
+        transcriber = MagicMock()
+        transcriber.transcribe_file.return_value = "Untertitel der Amara.org-Community"
+        transcriber.filter_transcript.return_value = ""
+
+        bridge = _make_audio_bridge(incoming=incoming, transcriber=transcriber)
+        download_resp = MagicMock()
+        download_resp.body = b"\x00\x01\x02"
+        bridge._client.download = AsyncMock(return_value=download_resp)
+
+        room = _make_room()
+        event = _make_audio_event()
+
+        with patch.dict("sys.modules", {"nio": _make_nio_mock()}):
+            asyncio.run(bridge._on_audio_message(room, event))
+
+        assert incoming.empty()
+        bridge._client.room_send.assert_called_once()
+        sent_body = bridge._client.room_send.call_args[1]["content"]["body"]
+        assert "nicht transkribiert" in sent_body

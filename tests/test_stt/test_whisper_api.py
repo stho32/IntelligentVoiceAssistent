@@ -113,3 +113,58 @@ class TestTranscribeFile:
 
         with pytest.raises(TranscriptionError, match="API error"):
             transcriber.transcribe_file(b"\x00\x01\x02\x03")
+
+
+class TestFilterTranscript:
+    """Tests for the filter_transcript() method."""
+
+    def test_removes_phrase(self):
+        """Configured phrase is removed from transcript."""
+        transcriber = WhisperTranscriber(
+            client=MagicMock(),
+            filter_phrases=["Untertitel der Amara.org-Community"],
+        )
+        result = transcriber.filter_transcript("Hallo Welt Untertitel der Amara.org-Community")
+        assert result == "Hallo Welt"
+
+    def test_case_insensitive(self):
+        """Phrase removal is case-insensitive."""
+        transcriber = WhisperTranscriber(
+            client=MagicMock(),
+            filter_phrases=["Untertitel der Amara.org-Community"],
+        )
+        result = transcriber.filter_transcript("untertitel der amara.org-community Hallo")
+        assert result == "Hallo"
+
+    def test_multiple_phrases(self):
+        """Multiple configured phrases are all removed."""
+        transcriber = WhisperTranscriber(
+            client=MagicMock(),
+            filter_phrases=["phantom one", "phantom two"],
+        )
+        result = transcriber.filter_transcript("phantom one real text phantom two")
+        assert result == "real text"
+
+    def test_empty_after_filter(self):
+        """Result is empty string when entire text is a phantom phrase."""
+        transcriber = WhisperTranscriber(
+            client=MagicMock(),
+            filter_phrases=["Untertitel der Amara.org-Community"],
+        )
+        result = transcriber.filter_transcript("Untertitel der Amara.org-Community")
+        assert result == ""
+
+    def test_no_phrases_configured(self):
+        """Without filter phrases, text passes through unchanged."""
+        transcriber = WhisperTranscriber(client=MagicMock())
+        result = transcriber.filter_transcript("Hallo Welt")
+        assert result == "Hallo Welt"
+
+    def test_normalises_whitespace(self):
+        """Multiple spaces are collapsed after phrase removal."""
+        transcriber = WhisperTranscriber(
+            client=MagicMock(),
+            filter_phrases=["REMOVE"],
+        )
+        result = transcriber.filter_transcript("before  REMOVE  after")
+        assert result == "before after"

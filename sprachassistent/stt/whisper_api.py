@@ -4,6 +4,7 @@ Sends recorded audio to the Whisper API and returns the transcription.
 """
 
 import io
+import re
 import wave
 
 from openai import OpenAI
@@ -28,10 +29,12 @@ class WhisperTranscriber:
         model: str = "whisper-1",
         language: str = "de",
         client: OpenAI | None = None,
+        filter_phrases: list[str] | tuple[str, ...] = (),
     ):
         self.model = model
         self.language = language
         self._client = client or OpenAI()
+        self._filter_phrases = list(filter_phrases)
 
     def transcribe(
         self,
@@ -111,6 +114,21 @@ class WhisperTranscriber:
 
         log.info("Transcription: %s", result.text)
         return result.text
+
+    def filter_transcript(self, text: str) -> str:
+        """Remove known hallucination phrases and normalise whitespace.
+
+        Args:
+            text: Raw transcription text.
+
+        Returns:
+            Cleaned text (may be empty after filtering).
+        """
+        for phrase in self._filter_phrases:
+            text = re.sub(re.escape(phrase), "", text, flags=re.IGNORECASE)
+        # Collapse multiple spaces and strip
+        text = re.sub(r"\s+", " ", text).strip()
+        return text
 
 
 def _pcm_to_wav(
