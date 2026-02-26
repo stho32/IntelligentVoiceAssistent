@@ -76,6 +76,42 @@ class WhisperTranscriber:
         log.info("Transcription: %s", result.text)
         return result.text
 
+    def transcribe_file(self, audio_bytes: bytes, filename: str = "audio.ogg") -> str:
+        """Transcribe an audio file (OGG, MP3, WAV, M4A etc.) to text.
+
+        Sends the file bytes directly to the Whisper API without PCM conversion.
+
+        Args:
+            audio_bytes: Raw file bytes (any format Whisper accepts).
+            filename: Filename hint for MIME type detection.
+
+        Returns:
+            Transcribed text string.
+
+        Raises:
+            ValueError: If audio_bytes is empty.
+            TranscriptionError: If the API call fails.
+        """
+        if not audio_bytes:
+            raise ValueError("No audio data to transcribe.")
+
+        log.info("Transcribing file '%s' (%d bytes)...", filename, len(audio_bytes))
+
+        buf = io.BytesIO(audio_bytes)
+        buf.name = filename
+
+        try:
+            result = self._client.audio.transcriptions.create(
+                model=self.model,
+                file=buf,
+                language=self.language,
+            )
+        except Exception as e:
+            raise TranscriptionError(f"Whisper API error: {e}") from e
+
+        log.info("Transcription: %s", result.text)
+        return result.text
+
 
 def _pcm_to_wav(
     pcm_data: bytes,

@@ -588,10 +588,18 @@ def main() -> None:
         try:
             from sprachassistent.chat.matrix_client import start_matrix_thread
 
-            _matrix_thread, matrix_bridge = start_matrix_thread(
-                matrix_cfg, matrix_incoming, matrix_outgoing
+            stt_cfg = config["stt"]
+            matrix_transcriber = WhisperTranscriber(
+                model=stt_cfg["model"],
+                language=stt_cfg["language"],
             )
-            log.info("Matrix chat integration enabled")
+            _matrix_thread, matrix_bridge = start_matrix_thread(
+                matrix_cfg,
+                matrix_incoming,
+                matrix_outgoing,
+                transcriber=matrix_transcriber,
+            )
+            log.info("Matrix chat integration enabled (with audio transcription)")
         except Exception as e:
             log.error("Failed to start Matrix bridge: %s", e)
             matrix_incoming = None

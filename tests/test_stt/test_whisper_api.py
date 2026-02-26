@@ -76,3 +76,40 @@ def test_transcribe_api_error(mock_openai):
 
     with pytest.raises(TranscriptionError, match="API error"):
         transcriber.transcribe(pcm)
+
+
+class TestTranscribeFile:
+    """Tests for the transcribe_file() method."""
+
+    def test_happy_path(self, mock_openai):
+        """File bytes are sent to API and text is returned."""
+        transcriber = WhisperTranscriber(client=mock_openai)
+        ogg_bytes = b"\x00\x01\x02\x03" * 100
+
+        result = transcriber.transcribe_file(ogg_bytes)
+        assert result == "Hallo Welt"
+        mock_openai.audio.transcriptions.create.assert_called_once()
+
+    def test_filename_set_on_bytesio(self, mock_openai):
+        """The filename is set correctly on the BytesIO object."""
+        transcriber = WhisperTranscriber(client=mock_openai)
+        ogg_bytes = b"\x00\x01\x02\x03" * 100
+
+        transcriber.transcribe_file(ogg_bytes, filename="voice.ogg")
+
+        call_kwargs = mock_openai.audio.transcriptions.create.call_args.kwargs
+        assert call_kwargs["file"].name == "voice.ogg"
+
+    def test_empty_bytes_raises(self, mock_openai):
+        """Empty bytes raise ValueError."""
+        transcriber = WhisperTranscriber(client=mock_openai)
+        with pytest.raises(ValueError, match="No audio data"):
+            transcriber.transcribe_file(b"")
+
+    def test_api_error_raises_transcription_error(self, mock_openai):
+        """API errors are wrapped in TranscriptionError."""
+        mock_openai.audio.transcriptions.create.side_effect = RuntimeError("API error")
+        transcriber = WhisperTranscriber(client=mock_openai)
+
+        with pytest.raises(TranscriptionError, match="API error"):
+            transcriber.transcribe_file(b"\x00\x01\x02\x03")

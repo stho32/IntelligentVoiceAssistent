@@ -11,7 +11,7 @@ import threading
 from typing import Any
 
 from sprachassistent.chat.message import ChatMessage
-from sprachassistent.exceptions import MatrixChatError
+from sprachassistent.exceptions import MatrixChatError, TranscriptionError
 from sprachassistent.utils.logging import get_logger
 
 log = get_logger("chat.matrix")
@@ -43,6 +43,7 @@ class MatrixBridge:
         incoming_queue: queue.Queue,
         outgoing_queue: queue.Queue,
         password: str = "",
+        transcriber: Any = None,
     ):
         self.homeserver = homeserver
         self.user_id = user_id
@@ -53,6 +54,7 @@ class MatrixBridge:
         self.incoming_queue = incoming_queue
         self.outgoing_queue = outgoing_queue
         self.password = password
+        self._transcriber = transcriber
         self._stop_event = asyncio.Event()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._client: Any = None
@@ -84,6 +86,9 @@ class MatrixBridge:
             raise MatrixChatError("No access_token or password provided")
 
         self._client.add_event_callback(self._on_message, nio.RoomMessageText)
+
+        if self._transcriber is not None:
+            self._client.add_event_callback(self._on_audio_message, nio.RoomMessageAudio)
 
         # Join room (idempotent if already joined)
         try:
@@ -127,9 +132,7 @@ class MatrixBridge:
                     await asyncio.sleep(5)
                 else:
                     rooms_with_events = [
-                        r
-                        for r, data in resp.rooms.join.items()
-                        if data.timeline.events
+                        r for r, data in resp.rooms.join.items() if data.timeline.events
                     ]
                     if rooms_with_events:
                         log.debug("Sync returned events in rooms: %s", rooms_with_events)
@@ -168,6 +171,118 @@ class MatrixBridge:
             event_id=event.event_id,
         )
         log.info("Chat message from %s: %s", msg.sender, msg.text[:80])
+        self.incoming_queue.put(msg)
+
+    async def _send_text(self, room_id: str, text: str) -> None:
+        """Send a text message directly to a Matrix room.
+
+        Args:
+            room_id: The room to send to.
+            text: The message text.
+        """
+        import nio
+
+        content = {
+            "msgtype": "m.text",
+            "body": text,
+            "format": "org.matrix.custom.html",
+            "formatted_body": text,
+        }
+        try:
+            resp = await self._client.room_send(
+                room_id,
+                message_type="m.room.message",
+                content=content,
+            )
+            if isinstance(resp, nio.RoomSendError):
+                log.error("Failed to send message: %s", resp.message)
+        except Exception as e:
+            log.error("Error sending message: %s", e)
+
+    async def _on_audio_message(self, room: Any, event: Any) -> None:
+        """Handle incoming audio messages (voice notes)."""
+        import nio
+
+        _MAX_FILE_SIZE = 25 * 1024 * 1024  # 25 MB (Whisper API limit)
+
+        if room.room_id != self.room_id:
+            return
+
+        if event.sender == self.user_id:
+            return
+
+        if event.sender not in self.allowed_users:
+            log.debug("Ignoring audio from non-whitelisted user %s", event.sender)
+            return
+
+        # Check file size from event metadata
+        try:
+            file_size = event.source["content"]["info"]["size"]
+        except (KeyError, TypeError):
+            file_size = 0
+
+        if file_size > _MAX_FILE_SIZE:
+            log.warning("Audio from %s too large (%d bytes), rejecting", event.sender, file_size)
+            await self._send_text(
+                room.room_id,
+                "Audio-Datei ist zu gross (max. 25 MB).",
+            )
+            return
+
+        # Download audio
+        try:
+            resp = await self._client.download(mxc=event.url)
+            if isinstance(resp, nio.DownloadError):
+                log.error("Audio download failed: %s", resp.message)
+                await self._send_text(
+                    room.room_id,
+                    "Fehler beim Herunterladen der Audio-Datei.",
+                )
+                return
+            audio_bytes = resp.body
+        except Exception as e:
+            log.error("Audio download exception: %s", e)
+            await self._send_text(
+                room.room_id,
+                "Fehler beim Herunterladen der Audio-Datei.",
+            )
+            return
+
+        # Determine filename from event body
+        filename = getattr(event, "body", "audio.ogg") or "audio.ogg"
+
+        # Transcribe
+        try:
+            text = await asyncio.to_thread(
+                self._transcriber.transcribe_file, audio_bytes, filename
+            )
+        except (TranscriptionError, Exception) as e:
+            log.error("Audio transcription failed: %s", e)
+            await self._send_text(
+                room.room_id,
+                "Fehler bei der Transkription der Sprachnachricht.",
+            )
+            return
+
+        if not text or not text.strip():
+            await self._send_text(
+                room.room_id,
+                "Sprachnachricht konnte nicht transkribiert werden (kein Text erkannt).",
+            )
+            return
+
+        # Send transcript as quote
+        await self._send_text(room.room_id, f"> Transkript: {text}")
+
+        # Create ChatMessage and enqueue
+        msg = ChatMessage(
+            room_id=room.room_id,
+            sender=event.sender,
+            text=text,
+            timestamp=event.server_timestamp,
+            event_id=event.event_id,
+        )
+        log.info("Audio message from %s transcribed: %s", msg.sender, msg.text[:80])
         self.incoming_queue.put(msg)
 
     async def _response_sender(self) -> None:
@@ -221,6 +336,7 @@ def start_matrix_thread(
     config: dict,
     incoming_queue: queue.Queue,
     outgoing_queue: queue.Queue,
+    transcriber: Any = None,
 ) -> tuple[threading.Thread, MatrixBridge]:
     """Start the Matrix bridge in a background daemon thread.
 
@@ -228,6 +344,7 @@ def start_matrix_thread(
         config: The 'matrix' section of the application config.
         incoming_queue: Queue for messages from Matrix -> main thread.
         outgoing_queue: Queue for responses from main thread -> Matrix.
+        transcriber: Optional WhisperTranscriber for audio message support.
 
     Returns:
         Tuple of (thread, bridge) for lifecycle management.
@@ -253,6 +370,7 @@ def start_matrix_thread(
         incoming_queue=incoming_queue,
         outgoing_queue=outgoing_queue,
         password=password,
+        transcriber=transcriber,
     )
 
     thread = threading.Thread(target=bridge.run_forever, daemon=True, name="matrix-bridge")

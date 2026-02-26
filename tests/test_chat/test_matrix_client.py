@@ -9,9 +9,19 @@ import pytest
 
 from sprachassistent.chat.matrix_client import MatrixBridge, start_matrix_thread
 from sprachassistent.chat.message import ChatMessage
-from sprachassistent.exceptions import MatrixChatError
+from sprachassistent.exceptions import MatrixChatError, TranscriptionError
 
 _SENTINEL = object()
+
+
+def _make_nio_mock(**overrides):
+    """Create a mock nio module with proper types for isinstance checks."""
+    mock_nio = MagicMock()
+    mock_nio.DownloadError = type("DownloadError", (), {})
+    mock_nio.RoomSendError = type("RoomSendError", (), {})
+    for key, val in overrides.items():
+        setattr(mock_nio, key, val)
+    return mock_nio
 
 
 def _make_bridge(
@@ -402,3 +412,246 @@ class TestJoinRoom:
         bridge._client = mock_client
         asyncio.run(mock_client.join(bridge.room_id))
         mock_client.join.assert_called_with("!room:matrix.org")
+
+
+def _make_audio_event(
+    sender="@user:matrix.org",
+    body="voice-message.ogg",
+    event_id="$audio1",
+    timestamp=1700000000,
+    url="mxc://matrix.org/audio123",
+    file_size=5000,
+):
+    """Create a mock RoomMessageAudio event."""
+    event = MagicMock()
+    event.sender = sender
+    event.body = body
+    event.event_id = event_id
+    event.server_timestamp = timestamp
+    event.url = url
+    event.source = {
+        "content": {
+            "info": {"size": file_size},
+        }
+    }
+    return event
+
+
+def _make_audio_bridge(incoming=None, transcriber=None, **kwargs):
+    """Create a MatrixBridge with a transcriber and a mock nio client."""
+    bridge = _make_bridge(incoming=incoming, **kwargs)
+    bridge._transcriber = transcriber
+    mock_client = AsyncMock()
+    mock_client.room_send = AsyncMock(return_value=MagicMock())
+    bridge._client = mock_client
+    return bridge
+
+
+class TestOnAudioMessage:
+    """Tests for the _on_audio_message callback."""
+
+    def test_happy_path(self):
+        """Audio is transcribed and ChatMessage is enqueued."""
+        incoming = queue.Queue()
+        transcriber = MagicMock()
+        transcriber.transcribe_file.return_value = "Hallo Welt"
+
+        bridge = _make_audio_bridge(incoming=incoming, transcriber=transcriber)
+        download_resp = MagicMock()
+        download_resp.body = b"\x00\x01\x02"
+        bridge._client.download = AsyncMock(return_value=download_resp)
+
+        room = _make_room()
+        event = _make_audio_event()
+
+        with patch.dict("sys.modules", {"nio": _make_nio_mock()}):
+            asyncio.run(bridge._on_audio_message(room, event))
+
+        msg = incoming.get_nowait()
+        assert isinstance(msg, ChatMessage)
+        assert msg.text == "Hallo Welt"
+        assert msg.sender == "@user:matrix.org"
+
+        # Transcript quote was sent
+        bridge._client.room_send.assert_called_once()
+        call_kwargs = bridge._client.room_send.call_args
+        assert "> Transkript: Hallo Welt" in call_kwargs[1]["content"]["body"]
+
+    def test_wrong_room_ignored(self):
+        """Audio from a different room is ignored."""
+        incoming = queue.Queue()
+        transcriber = MagicMock()
+        bridge = _make_audio_bridge(incoming=incoming, transcriber=transcriber)
+
+        room = _make_room(room_id="!other:matrix.org")
+        event = _make_audio_event()
+
+        asyncio.run(bridge._on_audio_message(room, event))
+
+        assert incoming.empty()
+        transcriber.transcribe_file.assert_not_called()
+
+    def test_own_message_ignored(self):
+        """Bot's own audio messages are ignored."""
+        incoming = queue.Queue()
+        transcriber = MagicMock()
+        bridge = _make_audio_bridge(
+            incoming=incoming,
+            transcriber=transcriber,
+            user_id="@bot:matrix.org",
+        )
+
+        room = _make_room()
+        event = _make_audio_event(sender="@bot:matrix.org")
+
+        asyncio.run(bridge._on_audio_message(room, event))
+
+        assert incoming.empty()
+        transcriber.transcribe_file.assert_not_called()
+
+    def test_non_allowed_user_ignored(self):
+        """Audio from non-whitelisted user is ignored."""
+        incoming = queue.Queue()
+        transcriber = MagicMock()
+        bridge = _make_audio_bridge(incoming=incoming, transcriber=transcriber)
+
+        room = _make_room()
+        event = _make_audio_event(sender="@stranger:matrix.org")
+
+        asyncio.run(bridge._on_audio_message(room, event))
+
+        assert incoming.empty()
+        transcriber.transcribe_file.assert_not_called()
+
+    def test_file_too_large(self):
+        """Audio over 25 MB is rejected with an error message."""
+        incoming = queue.Queue()
+        transcriber = MagicMock()
+        bridge = _make_audio_bridge(incoming=incoming, transcriber=transcriber)
+
+        room = _make_room()
+        event = _make_audio_event(file_size=26 * 1024 * 1024)
+
+        with patch.dict("sys.modules", {"nio": _make_nio_mock()}):
+            asyncio.run(bridge._on_audio_message(room, event))
+
+        assert incoming.empty()
+        transcriber.transcribe_file.assert_not_called()
+        bridge._client.room_send.assert_called_once()
+        sent_body = bridge._client.room_send.call_args[1]["content"]["body"]
+        assert "zu gross" in sent_body
+
+    def test_download_error(self):
+        """Download returning DownloadError sends error message."""
+        incoming = queue.Queue()
+        transcriber = MagicMock()
+        bridge = _make_audio_bridge(incoming=incoming, transcriber=transcriber)
+
+        DownloadError = type("DownloadError", (), {"message": "not found"})
+        download_error = DownloadError()
+        mock_nio = _make_nio_mock(DownloadError=DownloadError)
+        bridge._client.download = AsyncMock(return_value=download_error)
+
+        room = _make_room()
+        event = _make_audio_event()
+
+        with patch.dict("sys.modules", {"nio": mock_nio}):
+            asyncio.run(bridge._on_audio_message(room, event))
+
+        assert incoming.empty()
+        bridge._client.room_send.assert_called_once()
+        sent_body = bridge._client.room_send.call_args[1]["content"]["body"]
+        assert "Fehler" in sent_body
+
+    def test_download_exception(self):
+        """Download raising an exception sends error message."""
+        incoming = queue.Queue()
+        transcriber = MagicMock()
+        bridge = _make_audio_bridge(incoming=incoming, transcriber=transcriber)
+        bridge._client.download = AsyncMock(side_effect=RuntimeError("network error"))
+
+        room = _make_room()
+        event = _make_audio_event()
+
+        with patch.dict("sys.modules", {"nio": _make_nio_mock()}):
+            asyncio.run(bridge._on_audio_message(room, event))
+
+        assert incoming.empty()
+        bridge._client.room_send.assert_called_once()
+
+    def test_transcription_error(self):
+        """Transcription failure sends error message."""
+        incoming = queue.Queue()
+        transcriber = MagicMock()
+        transcriber.transcribe_file.side_effect = TranscriptionError("API failed")
+        bridge = _make_audio_bridge(incoming=incoming, transcriber=transcriber)
+
+        download_resp = MagicMock()
+        download_resp.body = b"\x00\x01\x02"
+        bridge._client.download = AsyncMock(return_value=download_resp)
+
+        room = _make_room()
+        event = _make_audio_event()
+
+        with patch.dict("sys.modules", {"nio": _make_nio_mock()}):
+            asyncio.run(bridge._on_audio_message(room, event))
+
+        assert incoming.empty()
+        bridge._client.room_send.assert_called_once()
+        sent_body = bridge._client.room_send.call_args[1]["content"]["body"]
+        assert "Transkription" in sent_body
+
+    def test_empty_transcript(self):
+        """Empty transcript sends info message, no ChatMessage enqueued."""
+        incoming = queue.Queue()
+        transcriber = MagicMock()
+        transcriber.transcribe_file.return_value = "   "
+        bridge = _make_audio_bridge(incoming=incoming, transcriber=transcriber)
+
+        download_resp = MagicMock()
+        download_resp.body = b"\x00\x01\x02"
+        bridge._client.download = AsyncMock(return_value=download_resp)
+
+        room = _make_room()
+        event = _make_audio_event()
+
+        with patch.dict("sys.modules", {"nio": _make_nio_mock()}):
+            asyncio.run(bridge._on_audio_message(room, event))
+
+        assert incoming.empty()
+        bridge._client.room_send.assert_called_once()
+        sent_body = bridge._client.room_send.call_args[1]["content"]["body"]
+        assert "nicht transkribiert" in sent_body
+
+    def test_no_transcriber_no_audio_callback(self):
+        """Without a transcriber, no audio callback is registered."""
+        bridge = _make_bridge()  # No transcriber
+
+        mock_client = MagicMock()
+        mock_nio = MagicMock()
+        mock_nio.AsyncClient.return_value = mock_client
+        mock_nio.LoginError = type("LoginError", (), {})
+        mock_client.join = AsyncMock(return_value=MagicMock())
+
+        async def run():
+            bridge._stop_event = asyncio.Event()
+            bridge._stop_event.set()
+            with patch.dict("sys.modules", {"nio": mock_nio}):
+                import nio
+
+                os.makedirs(bridge.store_path, exist_ok=True)
+                bridge._client = nio.AsyncClient(
+                    bridge.homeserver, bridge.user_id, store_path=bridge.store_path
+                )
+                bridge._client.access_token = bridge.access_token
+                bridge._client.user_id = bridge.user_id
+                bridge._client.device_id = bridge._client.device_id or "JARVIS"
+
+                bridge._client.add_event_callback(bridge._on_message, nio.RoomMessageText)
+                # Audio callback should NOT be registered
+                assert bridge._transcriber is None
+
+        asyncio.run(run())
+        # Verify add_event_callback was called only once (for text, not audio)
+        calls = mock_client.add_event_callback.call_args_list
+        assert len(calls) == 1
