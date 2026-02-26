@@ -23,12 +23,13 @@ class MatrixBridge:
     Args:
         homeserver: Matrix homeserver URL (e.g. "https://matrix.org").
         user_id: Bot's Matrix user ID (e.g. "@jarvis:matrix.org").
-        access_token: Access token for authentication.
+        access_token: Access token for authentication (optional if password given).
         room_id: The Matrix room to operate in.
         allowed_users: List of Matrix user IDs allowed to interact with the bot.
         store_path: Path to store E2E encryption keys.
         incoming_queue: Queue for messages from Matrix -> main thread.
         outgoing_queue: Queue for responses from main thread -> Matrix.
+        password: Password for login-based authentication (optional if access_token given).
     """
 
     def __init__(
@@ -41,6 +42,7 @@ class MatrixBridge:
         store_path: str,
         incoming_queue: queue.Queue,
         outgoing_queue: queue.Queue,
+        password: str = "",
     ):
         self.homeserver = homeserver
         self.user_id = user_id
@@ -50,6 +52,7 @@ class MatrixBridge:
         self.store_path = store_path
         self.incoming_queue = incoming_queue
         self.outgoing_queue = outgoing_queue
+        self.password = password
         self._stop_event = asyncio.Event()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._client: Any = None
@@ -65,9 +68,20 @@ class MatrixBridge:
             self.user_id,
             store_path=self.store_path,
         )
-        self._client.access_token = self.access_token
-        self._client.user_id = self.user_id
-        self._client.device_id = self._client.device_id or "JARVIS"
+
+        if self.access_token:
+            log.debug("Authenticating with access token")
+            self._client.access_token = self.access_token
+            self._client.user_id = self.user_id
+            self._client.device_id = self._client.device_id or "JARVIS"
+        elif self.password:
+            log.debug("Logging in with password for %s", self.user_id)
+            resp = await self._client.login(password=self.password, device_name="JARVIS")
+            if isinstance(resp, nio.LoginError):
+                raise MatrixChatError(f"Matrix login failed: {resp.message}")
+            log.info("Logged in as %s (device %s)", resp.user_id, resp.device_id)
+        else:
+            raise MatrixChatError("No access_token or password provided")
 
         self._client.add_event_callback(self._on_message, nio.RoomMessageText)
 
@@ -95,9 +109,12 @@ class MatrixBridge:
 
         # Initial sync to get current state (marks backlog start point)
         try:
+            log.debug("Starting initial sync...")
             resp = await self._client.sync(timeout=10000, full_state=True)
             if isinstance(resp, nio.SyncError):
                 log.error("Initial sync failed: %s", resp.message)
+            else:
+                log.debug("Initial sync complete, next_batch=%s", resp.next_batch)
         except Exception as e:
             log.error("Initial sync error: %s", e)
 
@@ -108,6 +125,14 @@ class MatrixBridge:
                 if isinstance(resp, nio.SyncError):
                     log.warning("Sync error: %s", resp.message)
                     await asyncio.sleep(5)
+                else:
+                    rooms_with_events = [
+                        r
+                        for r, data in resp.rooms.join.items()
+                        if data.timeline.events
+                    ]
+                    if rooms_with_events:
+                        log.debug("Sync returned events in rooms: %s", rooms_with_events)
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -118,7 +143,12 @@ class MatrixBridge:
         """Handle incoming room messages."""
         # Only process messages from the configured room
         if room.room_id != self.room_id:
-            log.debug("Ignoring message from room %s", room.room_id)
+            log.debug(
+                "Ignoring message from room %s (sender=%s, text=%s)",
+                room.room_id,
+                event.sender,
+                event.body[:80] if hasattr(event, "body") else "<no body>",
+            )
             return
 
         # Ignore own messages
@@ -206,8 +236,12 @@ def start_matrix_thread(
         MatrixChatError: If required config fields are missing.
     """
     access_token = config.get("access_token") or os.environ.get("MATRIX_ACCESS_TOKEN", "")
-    if not access_token:
-        raise MatrixChatError("Matrix access_token not configured")
+    password = config.get("password") or os.environ.get("MATRIX_PASSWORD", "")
+    if not access_token and not password:
+        raise MatrixChatError(
+            "Matrix: either access_token/MATRIX_ACCESS_TOKEN or "
+            "password/MATRIX_PASSWORD must be provided"
+        )
 
     bridge = MatrixBridge(
         homeserver=config["homeserver"],
@@ -218,6 +252,7 @@ def start_matrix_thread(
         store_path=config.get("store_path", "~/.config/jarvis/matrix_store"),
         incoming_queue=incoming_queue,
         outgoing_queue=outgoing_queue,
+        password=password,
     )
 
     thread = threading.Thread(target=bridge.run_forever, daemon=True, name="matrix-bridge")

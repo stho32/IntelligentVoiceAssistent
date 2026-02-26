@@ -1,6 +1,7 @@
 """Tests for the Matrix bridge (all nio interactions mocked)."""
 
 import asyncio
+import os
 import queue
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -161,8 +162,8 @@ class TestResponseSender:
 class TestStartMatrixThread:
     """Tests for the start_matrix_thread factory function."""
 
-    def test_missing_access_token_raises(self):
-        """Missing access_token in config and env raises MatrixChatError."""
+    def test_missing_credentials_raises(self):
+        """Missing both access_token and password raises MatrixChatError."""
         config = {
             "homeserver": "https://matrix.org",
             "user_id": "@bot:matrix.org",
@@ -206,6 +207,150 @@ class TestStartMatrixThread:
         call_kwargs = mock_bridge_cls.call_args.kwargs
         assert call_kwargs["access_token"] == "env_token"
         thread.join(timeout=1)
+
+    @patch("sprachassistent.chat.matrix_client.MatrixBridge")
+    def test_password_from_config(self, mock_bridge_cls):
+        """Password from config is passed to the bridge."""
+        mock_bridge_cls.return_value.run_forever = MagicMock()
+        config = {
+            "homeserver": "https://matrix.org",
+            "user_id": "@bot:matrix.org",
+            "password": "secret",
+            "room_id": "!room:matrix.org",
+            "allowed_users": [],
+        }
+
+        with patch.dict("os.environ", {}, clear=True):
+            thread, bridge = start_matrix_thread(config, queue.Queue(), queue.Queue())
+
+        call_kwargs = mock_bridge_cls.call_args.kwargs
+        assert call_kwargs["password"] == "secret"
+        assert call_kwargs["access_token"] == ""
+        thread.join(timeout=1)
+
+    @patch("sprachassistent.chat.matrix_client.MatrixBridge")
+    def test_password_from_env(self, mock_bridge_cls):
+        """MATRIX_PASSWORD env var is passed to the bridge."""
+        mock_bridge_cls.return_value.run_forever = MagicMock()
+        config = {
+            "homeserver": "https://matrix.org",
+            "user_id": "@bot:matrix.org",
+            "room_id": "!room:matrix.org",
+            "allowed_users": [],
+        }
+
+        with patch.dict("os.environ", {"MATRIX_PASSWORD": "env_pass"}, clear=True):
+            thread, bridge = start_matrix_thread(config, queue.Queue(), queue.Queue())
+
+        call_kwargs = mock_bridge_cls.call_args.kwargs
+        assert call_kwargs["password"] == "env_pass"
+        thread.join(timeout=1)
+
+
+class TestPasswordLogin:
+    """Tests for password-based login in start()."""
+
+    def test_login_called_when_password_given(self):
+        """When no access_token but password is given, login() is called."""
+        bridge = MatrixBridge(
+            homeserver="https://matrix.org",
+            user_id="@bot:matrix.org",
+            access_token="",
+            room_id="!room:matrix.org",
+            allowed_users=[],
+            store_path="/tmp/test_store",
+            incoming_queue=queue.Queue(),
+            outgoing_queue=queue.Queue(),
+            password="secret",
+        )
+
+        mock_login_resp = MagicMock()
+        mock_login_resp.user_id = "@bot:matrix.org"
+        mock_login_resp.device_id = "JARVIS"
+
+        mock_nio = MagicMock()
+        mock_nio.LoginError = type("LoginError", (), {})
+        mock_client = AsyncMock()
+        mock_client.login = AsyncMock(return_value=mock_login_resp)
+        mock_client.join = AsyncMock(return_value=MagicMock())
+        mock_nio.AsyncClient.return_value = mock_client
+        mock_nio.RoomMessageText = MagicMock()
+
+        async def run():
+            bridge._stop_event = asyncio.Event()
+            bridge._stop_event.set()  # stop immediately after start
+            with patch.dict("sys.modules", {"nio": mock_nio}):
+                # Patch start to only do the login part, not the sync loops
+                import nio
+
+                os.makedirs(bridge.store_path, exist_ok=True)
+                bridge._client = nio.AsyncClient(
+                    bridge.homeserver, bridge.user_id, store_path=bridge.store_path
+                )
+                resp = await bridge._client.login(password=bridge.password, device_name="JARVIS")
+                assert not isinstance(resp, nio.LoginError)
+
+        asyncio.run(run())
+        mock_client.login.assert_called_once_with(password="secret", device_name="JARVIS")
+
+    def test_login_error_raises(self):
+        """A failed login raises MatrixChatError."""
+        bridge = MatrixBridge(
+            homeserver="https://matrix.org",
+            user_id="@bot:matrix.org",
+            access_token="",
+            room_id="!room:matrix.org",
+            allowed_users=[],
+            store_path="/tmp/test_store",
+            incoming_queue=queue.Queue(),
+            outgoing_queue=queue.Queue(),
+            password="wrong",
+        )
+
+        mock_nio = MagicMock()
+        mock_login_error = MagicMock()
+        mock_login_error.message = "Invalid password"
+        mock_nio.LoginError = type(mock_login_error)
+
+        mock_client = AsyncMock()
+        mock_client.login = AsyncMock(return_value=mock_login_error)
+        mock_nio.AsyncClient.return_value = mock_client
+        mock_nio.RoomMessageText = MagicMock()
+
+        async def run():
+            with patch.dict("sys.modules", {"nio": mock_nio}):
+                await bridge.start()
+
+        with pytest.raises(MatrixChatError, match="login failed"):
+            asyncio.run(run())
+
+    def test_token_mode_skips_login(self):
+        """When access_token is set, login() is not called."""
+        bridge = _make_bridge()
+
+        mock_nio = MagicMock()
+        mock_client = AsyncMock()
+        mock_client.join = AsyncMock(return_value=MagicMock())
+        mock_client.sync = AsyncMock(return_value=MagicMock(spec=[]))
+        mock_nio.AsyncClient.return_value = mock_client
+        mock_nio.RoomMessageText = MagicMock()
+
+        async def run():
+            bridge._stop_event = asyncio.Event()
+            with patch.dict("sys.modules", {"nio": mock_nio}):
+                import nio
+
+                os.makedirs(bridge.store_path, exist_ok=True)
+                bridge._client = nio.AsyncClient(
+                    bridge.homeserver, bridge.user_id, store_path=bridge.store_path
+                )
+                # Simulate token mode: set access_token directly
+                bridge._client.access_token = bridge.access_token
+                bridge._client.user_id = bridge.user_id
+                bridge._client.device_id = bridge._client.device_id or "JARVIS"
+
+        asyncio.run(run())
+        mock_client.login.assert_not_called()
 
 
 class TestSyncLoop:

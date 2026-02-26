@@ -24,7 +24,7 @@ windows = [
     "sounddevice>=0.4",
 ]
 matrix = [
-    "matrix-nio[e2e]>=0.24",
+    "matrix-nio>=0.24",
 ]
 
 [project.scripts]

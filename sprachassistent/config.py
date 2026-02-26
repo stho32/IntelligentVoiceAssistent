@@ -89,9 +89,12 @@ def _validate_matrix_config(config: dict) -> None:
         if not matrix.get(field):
             raise ConfigError(f"matrix.{field} is required when matrix section is present")
 
-    if not matrix.get("access_token") and not os.environ.get("MATRIX_ACCESS_TOKEN"):
+    has_token = bool(matrix.get("access_token") or os.environ.get("MATRIX_ACCESS_TOKEN"))
+    has_password = bool(matrix.get("password") or os.environ.get("MATRIX_PASSWORD"))
+    if not has_token and not has_password:
         raise ConfigError(
-            "matrix.access_token must be set in config or MATRIX_ACCESS_TOKEN env var"
+            "matrix: either access_token/MATRIX_ACCESS_TOKEN or "
+            "password/MATRIX_PASSWORD must be provided"
         )
 
     if "allowed_users" not in matrix:

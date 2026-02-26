@@ -53,10 +53,13 @@ audio:
   vad_threshold: 0.5             # speech probability threshold
 
 # Optional -- uncomment to enable Matrix chat integration
+# Provide either password (auto-login) or access_token.
+# Both can also be set via MATRIX_PASSWORD / MATRIX_ACCESS_TOKEN env vars.
 # matrix:
 #   homeserver: "https://matrix.org"
 #   user_id: "@jarvis-bot:matrix.org"
-#   access_token: "syt_..."
+#   password: "your-password"          # or use MATRIX_PASSWORD env var
+#   # access_token: "syt_..."          # alternative to password
 #   room_id: "!abc123:matrix.org"
 #   allowed_users:
 #     - "@your-account:matrix.org"

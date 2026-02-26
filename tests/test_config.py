@@ -63,7 +63,8 @@ def test_load_config_missing_file():
 
 def test_load_default_config():
     """The default config.yaml can be loaded."""
-    config = load_config()
+    with patch.dict("os.environ", {"MATRIX_PASSWORD": "test"}):
+        config = load_config()
     assert "wake_word" in config
     assert config["wake_word"]["engine"] == "openwakeword"
 
@@ -205,8 +206,51 @@ def test_matrix_access_token_from_env(tmp_path):
     assert "matrix" in result
 
 
-def test_matrix_no_access_token_raises(tmp_path):
-    """Missing access_token in both config and env raises ConfigError."""
+def test_matrix_password_only_accepted(tmp_path):
+    """Config with password but no access_token is valid."""
+    config = _base_config(
+        matrix={
+            "homeserver": "https://matrix.org",
+            "user_id": "@bot:matrix.org",
+            "password": "secret",
+            "room_id": "!room:matrix.org",
+            "allowed_users": [],
+        }
+    )
+    path = tmp_path / "config.yaml"
+    with open(path, "w") as f:
+        yaml.dump(config, f)
+
+    with patch.dict("os.environ", {}, clear=False):
+        os.environ.pop("MATRIX_ACCESS_TOKEN", None)
+        result = load_config(path)
+
+    assert "matrix" in result
+
+
+def test_matrix_password_from_env(tmp_path):
+    """MATRIX_PASSWORD env var is accepted as credential."""
+    config = _base_config(
+        matrix={
+            "homeserver": "https://matrix.org",
+            "user_id": "@bot:matrix.org",
+            "room_id": "!room:matrix.org",
+            "allowed_users": [],
+        }
+    )
+    path = tmp_path / "config.yaml"
+    with open(path, "w") as f:
+        yaml.dump(config, f)
+
+    with patch.dict("os.environ", {"MATRIX_PASSWORD": "env_pass"}):
+        os.environ.pop("MATRIX_ACCESS_TOKEN", None)
+        result = load_config(path)
+
+    assert "matrix" in result
+
+
+def test_matrix_no_credentials_raises(tmp_path):
+    """Missing both token and password raises ConfigError."""
     config = _base_config(
         matrix={
             "homeserver": "https://matrix.org",
@@ -220,7 +264,7 @@ def test_matrix_no_access_token_raises(tmp_path):
         yaml.dump(config, f)
 
     with patch.dict("os.environ", {}, clear=False):
-        # Make sure MATRIX_ACCESS_TOKEN is not in env
         os.environ.pop("MATRIX_ACCESS_TOKEN", None)
-        with pytest.raises(ConfigError, match="access_token"):
+        os.environ.pop("MATRIX_PASSWORD", None)
+        with pytest.raises(ConfigError, match="access_token.*password|password.*access_token"):
             load_config(path)
