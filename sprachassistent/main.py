@@ -1,10 +1,15 @@
 """Voice assistant "Jarvis" - main process.
 
 Main loop: Wake-Word -> Ding -> Record -> STT -> AI -> TTS -> Repeat.
+Optionally bridges Matrix chat messages into the same AI backend.
 """
 
+from __future__ import annotations
+
 import argparse
+import contextlib
 import logging
+import queue
 import subprocess
 import threading
 from pathlib import Path
@@ -12,9 +17,15 @@ from pathlib import Path
 from sprachassistent.ai.claude_code import ClaudeCodeBackend
 from sprachassistent.audio.recorder import SpeechRecorder
 from sprachassistent.audio.wake_word import WakeWordDetector
+from sprachassistent.chat.message import ChatMessage
 from sprachassistent.config import get_config
-from sprachassistent.input.keyboard import KeyboardMonitor
-from sprachassistent.input.text_input import TextInput
+
+try:
+    from sprachassistent.input.keyboard import KeyboardMonitor
+    from sprachassistent.input.text_input import TextInput
+except ImportError:
+    KeyboardMonitor = None  # type: ignore[assignment,misc]
+    TextInput = None  # type: ignore[assignment,misc]
 from sprachassistent.platform.factory import (
     create_audio_input,
     create_audio_output,
@@ -43,22 +54,75 @@ _ERROR_MESSAGES = {
 }
 
 
-def create_components(config: dict, *, resume_session: bool = True) -> dict:
+def _process_chat_message(
+    msg: ChatMessage,
+    ai_backend: ClaudeCodeBackend,
+    outgoing_queue: queue.Queue,
+    ui: TerminalUI,
+    cancel_keywords: list[str],
+    reset_keywords: list[str],
+) -> None:
+    """Process a single chat message from Matrix.
+
+    Handles cancel/reset keywords and forwards normal messages to the AI backend.
+    Restart keywords are intentionally ignored for chat (no sense restarting
+    the local process from a phone).
+
+    Args:
+        msg: The incoming chat message.
+        ai_backend: The AI backend instance.
+        outgoing_queue: Queue for sending responses back to Matrix.
+        ui: Terminal UI for logging.
+        cancel_keywords: Keywords that cancel the current AI request.
+        reset_keywords: Keywords that reset the conversation.
+    """
+    text = msg.text.strip()
+    normalized = text.lower()
+
+    # Check for cancel command
+    if cancel_keywords and any(kw in normalized for kw in cancel_keywords):
+        ai_backend.cancel()
+        outgoing_queue.put((msg.room_id, "Abgebrochen."))
+        ui.log(f"Chat cancel from {msg.sender}")
+        return
+
+    # Check for reset command
+    if reset_keywords and any(kw in normalized for kw in reset_keywords):
+        ai_backend.reset_session()
+        outgoing_queue.put((msg.room_id, "Konversation zurueckgesetzt."))
+        ui.log(f"Chat reset from {msg.sender}")
+        return
+
+    # Normal message -- forward to AI with chat prefix
+    ui.log(f"Chat from {msg.sender}: {text[:80]}")
+    try:
+        response = ai_backend.ask(f"[Chat-Nachricht, Markdown-Antwort erlaubt]: {text}")
+        outgoing_queue.put((msg.room_id, response))
+        ui.log(f"Chat response sent ({len(response)} chars)")
+    except Exception as e:
+        ui.log(f"Chat AI error: {e}")
+        outgoing_queue.put((msg.room_id, f"Fehler bei der Verarbeitung: {e}"))
+
+
+def create_components(
+    config: dict,
+    *,
+    resume_session: bool = True,
+    chat_only: bool = False,
+) -> dict:
     """Create all assistant components from config.
 
     Args:
         config: Application configuration dictionary.
         resume_session: If True (default), the AI backend resumes the
             most recent Claude Code session on first call.
+        chat_only: If True, skip audio components (wake word, recorder,
+            STT, TTS) and only create the AI backend.
 
     Returns:
         Dictionary with component instances.
     """
-    ww_cfg = config["wake_word"]
-    audio_cfg = config["audio"]
     ai_cfg = config["ai"]
-    stt_cfg = config["stt"]
-    tts_cfg = config["tts"]
 
     # Load system prompt
     prompt_path = _PACKAGE_DIR / ai_cfg["system_prompt_path"]
@@ -66,33 +130,46 @@ def create_components(config: dict, *, resume_session: bool = True) -> dict:
     if prompt_path.exists():
         system_prompt = prompt_path.read_text().strip()
 
-    return {
-        "wake_word": WakeWordDetector(
-            model_path=ww_cfg.get("model_path") or ww_cfg.get("model_name", "hey_jarvis"),
-            threshold=ww_cfg.get("threshold", 0.5),
-        ),
-        "recorder": SpeechRecorder(
-            sample_rate=audio_cfg["sample_rate"],
-            vad_threshold=audio_cfg.get("vad_threshold", 0.5),
-            silence_duration_sec=audio_cfg.get("silence_threshold_sec", 1.5),
-            max_duration_sec=audio_cfg.get("max_recording_sec", 30),
-        ),
-        "transcriber": WhisperTranscriber(
-            model=stt_cfg["model"],
-            language=stt_cfg["language"],
-        ),
+    components = {
         "ai_backend": ClaudeCodeBackend(
             working_directory=ai_cfg["working_directory"],
             system_prompt=system_prompt,
             timeout=ai_cfg.get("timeout", 300),
             resume_session=resume_session,
         ),
-        "tts": OpenAITextToSpeech(
-            model=tts_cfg["model"],
-            voice=tts_cfg["voice"],
-            speed=tts_cfg.get("speed", 1.0),
-        ),
     }
+
+    if not chat_only:
+        ww_cfg = config["wake_word"]
+        audio_cfg = config["audio"]
+        stt_cfg = config["stt"]
+        tts_cfg = config["tts"]
+
+        components.update(
+            {
+                "wake_word": WakeWordDetector(
+                    model_path=ww_cfg.get("model_path") or ww_cfg.get("model_name", "hey_jarvis"),
+                    threshold=ww_cfg.get("threshold", 0.5),
+                ),
+                "recorder": SpeechRecorder(
+                    sample_rate=audio_cfg["sample_rate"],
+                    vad_threshold=audio_cfg.get("vad_threshold", 0.5),
+                    silence_duration_sec=audio_cfg.get("silence_threshold_sec", 1.5),
+                    max_duration_sec=audio_cfg.get("max_recording_sec", 30),
+                ),
+                "transcriber": WhisperTranscriber(
+                    model=stt_cfg["model"],
+                    language=stt_cfg["language"],
+                ),
+                "tts": OpenAITextToSpeech(
+                    model=tts_cfg["model"],
+                    voice=tts_cfg["voice"],
+                    speed=tts_cfg.get("speed", 1.0),
+                ),
+            }
+        )
+
+    return components
 
 
 def _thinking_beep_loop(
@@ -159,6 +236,8 @@ def run_loop(
     restart_keywords: list[str] | None = None,
     keyboard_monitor: KeyboardMonitor | None = None,
     text_input: TextInput | None = None,
+    matrix_incoming: queue.Queue | None = None,
+    matrix_outgoing: queue.Queue | None = None,
 ) -> None:
     """Run the main assistant loop.
 
@@ -173,6 +252,8 @@ def run_loop(
         restart_keywords: List of keywords that restart the assistant process.
         keyboard_monitor: Optional keyboard monitor for text input activation.
         text_input: Optional text input handler for keyboard-based input.
+        matrix_incoming: Optional queue for incoming Matrix chat messages.
+        matrix_outgoing: Optional queue for outgoing Matrix chat responses.
     """
     if cancel_keywords is None:
         cancel_keywords = []
@@ -212,6 +293,20 @@ def run_loop(
             # Phase 1: Listen for wake word (normal voice path)
             audio_chunk = mic.read_chunk()
             if not wake_word.process(audio_chunk):
+                # Check for Matrix chat messages while idle
+                if matrix_incoming is not None and matrix_outgoing is not None:
+                    try:
+                        chat_msg = matrix_incoming.get_nowait()
+                        _process_chat_message(
+                            chat_msg,
+                            ai_backend,
+                            matrix_outgoing,
+                            ui,
+                            cancel_keywords,
+                            reset_keywords,
+                        )
+                    except queue.Empty:
+                        pass
                 continue
 
             # Wake word detected
@@ -406,6 +501,52 @@ def run_loop(
         ui.set_state(AssistantState.LISTENING)
 
 
+def run_chat_loop(
+    ai_backend: ClaudeCodeBackend,
+    ui: TerminalUI,
+    matrix_incoming: queue.Queue,
+    matrix_outgoing: queue.Queue,
+    cancel_keywords: list[str] | None = None,
+    reset_keywords: list[str] | None = None,
+) -> None:
+    """Run a chat-only loop without any audio components.
+
+    Blocks on the incoming queue instead of polling audio.
+
+    Args:
+        ai_backend: The AI backend instance.
+        ui: Active terminal UI.
+        matrix_incoming: Queue for incoming Matrix chat messages.
+        matrix_outgoing: Queue for outgoing Matrix chat responses.
+        cancel_keywords: Keywords that cancel the current AI request.
+        reset_keywords: Keywords that reset the conversation session.
+    """
+    if cancel_keywords is None:
+        cancel_keywords = []
+    if reset_keywords is None:
+        reset_keywords = []
+
+    ui.set_state(AssistantState.LISTENING)
+    ui.log("Chat-only mode. Waiting for Matrix messages...")
+
+    while True:
+        try:
+            chat_msg = matrix_incoming.get(timeout=1.0)
+        except queue.Empty:
+            continue
+
+        ui.set_state(AssistantState.PROCESSING)
+        _process_chat_message(
+            chat_msg,
+            ai_backend,
+            matrix_outgoing,
+            ui,
+            cancel_keywords,
+            reset_keywords,
+        )
+        ui.set_state(AssistantState.LISTENING)
+
+
 def main() -> None:
     """Start the voice assistant."""
     parser = argparse.ArgumentParser(description="Jarvis Voice Assistant")
@@ -413,6 +554,11 @@ def main() -> None:
         "--new-session",
         action="store_true",
         help="Start with a fresh conversation instead of resuming the previous one",
+    )
+    parser.add_argument(
+        "--chat-only",
+        action="store_true",
+        help="Run in chat-only mode (no audio, Matrix messages only)",
     )
     args = parser.parse_args()
 
@@ -431,6 +577,62 @@ def main() -> None:
     log_level = getattr(logging, log_level_name.upper(), logging.DEBUG)
     setup_logging(level=log_level, log_file=log_file)
 
+    # Start Matrix bridge if configured
+    matrix_cfg = config.get("matrix")
+    matrix_incoming = None
+    matrix_outgoing = None
+    matrix_bridge = None
+    if matrix_cfg:
+        matrix_incoming = queue.Queue()
+        matrix_outgoing = queue.Queue()
+        try:
+            from sprachassistent.chat.matrix_client import start_matrix_thread
+
+            _matrix_thread, matrix_bridge = start_matrix_thread(
+                matrix_cfg, matrix_incoming, matrix_outgoing
+            )
+            log.info("Matrix chat integration enabled")
+        except Exception as e:
+            log.error("Failed to start Matrix bridge: %s", e)
+            matrix_incoming = None
+            matrix_outgoing = None
+
+    chat_only = args.chat_only
+
+    if chat_only:
+        if matrix_incoming is None:
+            log.error("Matrix configuration required for --chat-only mode")
+            raise SystemExit(1)
+
+        try:
+            components = create_components(
+                config, resume_session=not args.new_session, chat_only=True
+            )
+        except Exception as e:
+            log.error("Failed to initialize components: %s", e)
+            raise SystemExit(1) from e
+
+        commands_cfg = config.get("commands", {})
+        cancel_kw = commands_cfg.get("cancel_keywords", [])
+        reset_kw = commands_cfg.get("reset_keywords", [])
+
+        with TerminalUI() as ui:
+            try:
+                run_chat_loop(
+                    components["ai_backend"],
+                    ui,
+                    matrix_incoming,
+                    matrix_outgoing,
+                    cancel_keywords=cancel_kw,
+                    reset_keywords=reset_kw,
+                )
+            except KeyboardInterrupt:
+                ui.log("Shutting down...")
+            finally:
+                if matrix_bridge:
+                    matrix_bridge.request_stop()
+        return
+
     audio_cfg = config["audio"]
 
     try:
@@ -438,6 +640,8 @@ def main() -> None:
     except Exception as e:
         log.error("Failed to initialize components: %s", e)
         raise SystemExit(1) from e
+
+    kb_ctx = KeyboardMonitor() if KeyboardMonitor is not None else contextlib.nullcontext()
 
     with (
         create_audio_input(
@@ -447,9 +651,9 @@ def main() -> None:
         ) as mic,
         create_audio_output() as player,
         TerminalUI() as ui,
-        KeyboardMonitor() as keyboard_monitor,
+        kb_ctx as keyboard_monitor,
     ):
-        text_input = TextInput()
+        text_input = TextInput() if TextInput is not None else None
         try:
             beep_interval = config["ai"].get("thinking_beep_interval", 3)
             commands_cfg = config.get("commands", {})
@@ -467,6 +671,8 @@ def main() -> None:
                 restart_keywords=restart_kw,
                 keyboard_monitor=keyboard_monitor,
                 text_input=text_input,
+                matrix_incoming=matrix_incoming,
+                matrix_outgoing=matrix_outgoing,
             )
         except KeyboardInterrupt:
             ui.log("Shutting down...")
@@ -474,6 +680,9 @@ def main() -> None:
             ui.log("Restarting...")
             # Resources are cleaned up by the with-block exiting
             _restart_assistant()
+        finally:
+            if matrix_bridge:
+                matrix_bridge.request_stop()
 
 
 if __name__ == "__main__":

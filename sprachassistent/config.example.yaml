@@ -51,3 +51,13 @@ audio:
   silence_threshold_sec: 1.5     # pause until recording stops
   max_recording_sec: 30
   vad_threshold: 0.5             # speech probability threshold
+
+# Optional -- uncomment to enable Matrix chat integration
+# matrix:
+#   homeserver: "https://matrix.org"
+#   user_id: "@jarvis-bot:matrix.org"
+#   access_token: "syt_..."
+#   room_id: "!abc123:matrix.org"
+#   allowed_users:
+#     - "@your-account:matrix.org"
+#   store_path: "~/.config/jarvis/matrix_store"

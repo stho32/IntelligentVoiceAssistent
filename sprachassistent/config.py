@@ -8,6 +8,8 @@ from pathlib import Path
 
 import yaml
 
+from sprachassistent.exceptions import ConfigError
+
 _CONFIG_DIR = Path(__file__).parent
 _DEFAULT_CONFIG_PATH = _CONFIG_DIR / "config.yaml"
 _EXAMPLE_CONFIG_PATH = _CONFIG_DIR / "config.example.yaml"
@@ -40,6 +42,7 @@ def load_config(path: Path | None = None) -> dict:
         config = yaml.safe_load(f)
 
     _expand_paths(config)
+    _validate_matrix_config(config)
     return config
 
 
@@ -59,8 +62,40 @@ def _expand_paths(config: dict) -> None:
         ("wake_word", "model_path"),
         ("ai", "system_prompt_path"),
         ("logging", "file"),
+        ("matrix", "store_path"),
     }
     for section_key, value_key in path_keys:
         section = config.get(section_key, {})
         if value_key in section and isinstance(section[value_key], str):
             section[value_key] = os.path.expanduser(section[value_key])
+
+
+def _validate_matrix_config(config: dict) -> None:
+    """Validate the optional matrix configuration section.
+
+    If the 'matrix' section is absent, nothing happens (Matrix is optional).
+    If present, required fields are checked and access_token must be in
+    config or the MATRIX_ACCESS_TOKEN environment variable.
+
+    Raises:
+        ConfigError: If the matrix section is present but incomplete.
+    """
+    matrix = config.get("matrix")
+    if matrix is None:
+        return
+
+    required = ("homeserver", "user_id", "room_id")
+    for field in required:
+        if not matrix.get(field):
+            raise ConfigError(f"matrix.{field} is required when matrix section is present")
+
+    if not matrix.get("access_token") and not os.environ.get("MATRIX_ACCESS_TOKEN"):
+        raise ConfigError(
+            "matrix.access_token must be set in config or MATRIX_ACCESS_TOKEN env var"
+        )
+
+    if "allowed_users" not in matrix:
+        raise ConfigError("matrix.allowed_users must be present (may be an empty list)")
+
+    if not isinstance(matrix["allowed_users"], list):
+        raise ConfigError("matrix.allowed_users must be a list")

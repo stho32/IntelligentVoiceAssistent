@@ -1,13 +1,21 @@
 """Tests for the main loop (all components mocked)."""
 
+import queue
 import subprocess
 import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from sprachassistent.chat.message import ChatMessage
 from sprachassistent.exceptions import AIBackendError
-from sprachassistent.main import _RestartRequested, create_components, run_loop
+from sprachassistent.main import (
+    _process_chat_message,
+    _RestartRequested,
+    create_components,
+    run_chat_loop,
+    run_loop,
+)
 from sprachassistent.utils.terminal_ui import AssistantState
 
 
@@ -605,6 +613,8 @@ def test_main_handles_restart_requested(mock_restart):
         patch("sprachassistent.main.create_audio_input"),
         patch("sprachassistent.main.create_audio_output"),
         patch("sprachassistent.main.TerminalUI"),
+        patch("sprachassistent.main.KeyboardMonitor"),
+        patch("sprachassistent.main.TextInput"),
         patch("sprachassistent.main.run_loop") as mock_run_loop,
     ):
         mock_cfg.return_value = {
@@ -679,6 +689,8 @@ def test_main_new_session_flag(mock_restart):
         patch("sprachassistent.main.create_audio_input"),
         patch("sprachassistent.main.create_audio_output"),
         patch("sprachassistent.main.TerminalUI"),
+        patch("sprachassistent.main.KeyboardMonitor"),
+        patch("sprachassistent.main.TextInput"),
         patch("sprachassistent.main.run_loop") as mock_run_loop,
     ):
         mock_cfg.return_value = {
@@ -695,6 +707,9 @@ def test_main_new_session_flag(mock_restart):
         mock_create.assert_called_once()
         kwargs = mock_create.call_args.kwargs
         assert kwargs["resume_session"] is False
+
+
+# --- Text input tests ---
 
 
 def test_text_input_bypasses_recording_and_stt():
@@ -891,3 +906,205 @@ def test_backward_compat_without_keyboard_monitor():
 
     # Normal voice path should work without keyboard_monitor
     components["ai_backend"].ask.assert_called_once_with("Hello")
+
+
+# --- Matrix chat integration tests ---
+
+
+def _make_chat_msg(text="Hello", sender="@user:matrix.org", room_id="!room:matrix.org"):
+    """Create a ChatMessage for testing."""
+    return ChatMessage(
+        room_id=room_id,
+        sender=sender,
+        text=text,
+        timestamp=1700000000000,
+        event_id="$evt1",
+    )
+
+
+def test_chat_message_processed_in_idle_loop():
+    """Chat message from Matrix queue is processed when wake word is not detected."""
+    components = _make_mock_components()
+    mic = MagicMock()
+    player = MagicMock()
+    ui = MagicMock()
+
+    incoming = queue.Queue()
+    outgoing = queue.Queue()
+
+    call_count = 0
+
+    def wake_word_side_effect(chunk):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            # First iteration: no wake word, but chat message waiting
+            return False
+        raise KeyboardInterrupt
+
+    components["wake_word"].process.side_effect = wake_word_side_effect
+    components["ai_backend"].ask.return_value = "Chat response"
+
+    incoming.put(_make_chat_msg("Hello from chat"))
+
+    with pytest.raises(KeyboardInterrupt):
+        run_loop(
+            components,
+            mic,
+            player,
+            ui,
+            matrix_incoming=incoming,
+            matrix_outgoing=outgoing,
+        )
+
+    components["ai_backend"].ask.assert_called_once()
+    assert "[Chat-Nachricht" in components["ai_backend"].ask.call_args[0][0]
+    room_id, response = outgoing.get_nowait()
+    assert response == "Chat response"
+
+
+def test_chat_not_processed_without_queues():
+    """Without matrix queues, the loop works as before."""
+    components = _make_mock_components()
+    mic = MagicMock()
+    player = MagicMock()
+    ui = MagicMock()
+
+    call_count = 0
+
+    def wake_word_side_effect(chunk):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return False
+        raise KeyboardInterrupt
+
+    components["wake_word"].process.side_effect = wake_word_side_effect
+
+    with pytest.raises(KeyboardInterrupt):
+        run_loop(components, mic, player, ui)
+
+    components["ai_backend"].ask.assert_not_called()
+
+
+def test_process_chat_message_cancel():
+    """Cancel keyword in chat message triggers cancel."""
+    ai = MagicMock()
+    outgoing = queue.Queue()
+    ui = MagicMock()
+    msg = _make_chat_msg("Stopp")
+
+    _process_chat_message(msg, ai, outgoing, ui, ["stopp"], [])
+
+    ai.cancel.assert_called_once()
+    room_id, text = outgoing.get_nowait()
+    assert "Abgebrochen" in text
+
+
+def test_process_chat_message_reset():
+    """Reset keyword in chat message triggers session reset."""
+    ai = MagicMock()
+    outgoing = queue.Queue()
+    ui = MagicMock()
+    msg = _make_chat_msg("reset")
+
+    _process_chat_message(msg, ai, outgoing, ui, [], ["reset"])
+
+    ai.reset_session.assert_called_once()
+    room_id, text = outgoing.get_nowait()
+    assert "zurueckgesetzt" in text
+
+
+def test_process_chat_message_restart_ignored():
+    """Restart keywords are just normal text in chat (not handled specially)."""
+    ai = MagicMock()
+    ai.ask.return_value = "Some response"
+    outgoing = queue.Queue()
+    ui = MagicMock()
+    msg = _make_chat_msg("Neustart")
+
+    _process_chat_message(msg, ai, outgoing, ui, [], [])
+
+    ai.ask.assert_called_once()
+    assert "[Chat-Nachricht" in ai.ask.call_args[0][0]
+
+
+def test_process_chat_message_normal():
+    """Normal chat message is forwarded to AI with markdown prefix."""
+    ai = MagicMock()
+    ai.ask.return_value = "AI answer"
+    outgoing = queue.Queue()
+    ui = MagicMock()
+    msg = _make_chat_msg("What is the weather?")
+
+    _process_chat_message(msg, ai, outgoing, ui, [], [])
+
+    ai.ask.assert_called_once()
+    assert "What is the weather?" in ai.ask.call_args[0][0]
+    assert "[Chat-Nachricht, Markdown-Antwort erlaubt]" in ai.ask.call_args[0][0]
+    room_id, text = outgoing.get_nowait()
+    assert text == "AI answer"
+
+
+def test_process_chat_message_ai_error():
+    """AI error results in error message sent to chat."""
+    ai = MagicMock()
+    ai.ask.side_effect = RuntimeError("AI down")
+    outgoing = queue.Queue()
+    ui = MagicMock()
+    msg = _make_chat_msg("Test")
+
+    _process_chat_message(msg, ai, outgoing, ui, [], [])
+
+    room_id, text = outgoing.get_nowait()
+    assert "Fehler" in text
+
+
+def test_chat_only_loop_processes_messages():
+    """Chat-only loop processes messages from the queue."""
+    ai = MagicMock()
+    ai.ask.return_value = "Response"
+    incoming = queue.Queue()
+    outgoing = queue.Queue()
+    ui = MagicMock()
+
+    incoming.put(_make_chat_msg("Hello"))
+
+    call_count = [0]
+    original_get = incoming.get
+
+    def get_with_exit(timeout=None):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return original_get(timeout=0)
+        raise KeyboardInterrupt
+
+    incoming.get = get_with_exit
+
+    with pytest.raises(KeyboardInterrupt):
+        run_chat_loop(ai, ui, incoming, outgoing)
+
+    ai.ask.assert_called_once()
+    room_id, text = outgoing.get_nowait()
+    assert text == "Response"
+
+
+@patch("sprachassistent.main.WakeWordDetector")
+@patch("sprachassistent.main.SpeechRecorder")
+@patch("sprachassistent.main.WhisperTranscriber")
+@patch("sprachassistent.main.ClaudeCodeBackend")
+@patch("sprachassistent.main.OpenAITextToSpeech")
+def test_create_components_chat_only(mock_tts, mock_ai, mock_stt, mock_rec, mock_ww):
+    """create_components with chat_only=True only creates AI backend."""
+    config = _make_config()
+    components = create_components(config, chat_only=True)
+
+    assert "ai_backend" in components
+    assert "wake_word" not in components
+    assert "recorder" not in components
+    assert "transcriber" not in components
+    assert "tts" not in components
+    mock_ww.assert_not_called()
+    mock_rec.assert_not_called()
+    mock_stt.assert_not_called()
+    mock_tts.assert_not_called()

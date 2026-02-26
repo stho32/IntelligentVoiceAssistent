@@ -23,6 +23,9 @@ dependencies = [
 windows = [
     "sounddevice>=0.4",
 ]
+matrix = [
+    "matrix-nio[e2e]>=0.24",
+]
 
 [project.scripts]
 sprachassistent = "sprachassistent.main:main"

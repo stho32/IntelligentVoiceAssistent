@@ -31,3 +31,7 @@ class TTSError(AssistantError):
 
 class ConfigError(AssistantError):
     """Errors related to configuration loading."""
+
+
+class MatrixChatError(AssistantError):
+    """Errors related to the Matrix chat integration."""

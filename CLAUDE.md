@@ -15,7 +15,8 @@ and executes tasks via Claude Code subprocess against a notes folder (`~/Projekt
 
 ## Commands
 
-- `uv run sprachassistent` - Start the voice assistant
+- `uv run sprachassistent` - Start the voice assistant (with optional Matrix chat)
+- `uv run sprachassistent --chat-only` - Run in Matrix chat-only mode (no audio)
 - `uv run pytest` - Run all tests
 - `uv run pytest tests/test_audio/test_recorder.py` - Run a single test file
 - `uv run pytest -k test_ask_first_call` - Run a single test by name
@@ -41,6 +42,8 @@ Wake Word Detection -> Ding Sound -> Record Speech -> STT (Whisper API) -> AI (C
 - `ai/claude_code.py` - Subprocess wrapper: first call uses `--system-prompt`, subsequent calls use `--continue` for persistent conversation. Strips `CLAUDECODE` env var to allow nesting.
 - `tts/openai_tts.py` - Streams PCM from OpenAI TTS at 24kHz for low-latency playback
 - `utils/terminal_ui.py` - Rich Live display with state machine (IDLE/LISTENING/RECORDING/PROCESSING/SPEAKING/ERROR)
+- `chat/message.py` - ChatMessage frozen dataclass for Matrix messages
+- `chat/matrix_client.py` - MatrixBridge async client in background thread, communicates via queues
 - `config.py` - Loads `sprachassistent/config.yaml`, expands `~` in path values
 - `exceptions.py` - Exception hierarchy rooted at `AssistantError`
 
@@ -90,6 +93,8 @@ Alle Feature-Anforderungen liegen in `Requirements/` und folgen dem Schema `NNN-
 - `001` bis `010`: Basisarchitektur, Konversation, Audio, UI, Fehlerbehandlung, Abbruch, Reset, Hilfe, Neustart
 - `011`: Selbstbewusstsein und Quelltext-Zugriff (dieses Feature)
 - `012`: Konversations-Persistenz ueber Neustart
+- `013`: Cross-Platform-Abstraktion
+- `015`: Matrix-Chat-Integration (optionaler Textkanal via Matrix-Protokoll)
 
 ## Language
 
