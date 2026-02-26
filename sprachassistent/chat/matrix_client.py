@@ -10,7 +10,7 @@ import queue
 import threading
 from typing import Any
 
-from sprachassistent.chat.message import ChatMessage
+from sprachassistent.chat.message import AssistantMessage, InputType, MessageSource
 from sprachassistent.exceptions import MatrixChatError, TranscriptionError
 from sprachassistent.utils.logging import get_logger
 
@@ -50,6 +50,7 @@ class MatrixBridge:
         password: str = "",
         access_token: str = "",
         transcriber: Any = None,
+        start_timestamp: int = 0,
     ):
         if not access_token and not password:
             raise MatrixChatError("Either password or access_token is required")
@@ -63,6 +64,7 @@ class MatrixBridge:
         self.incoming_queue = incoming_queue
         self.outgoing_queue = outgoing_queue
         self._transcriber = transcriber
+        self._start_timestamp = start_timestamp
         self._stop_event = asyncio.Event()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._client: Any = None
@@ -167,19 +169,27 @@ class MatrixBridge:
         if event.sender == self.user_id:
             return
 
+        # Ignore messages that predate this session
+        if self._start_timestamp and event.server_timestamp < self._start_timestamp:
+            log.debug(
+                "Ignoring old message (ts=%d < %d)", event.server_timestamp, self._start_timestamp
+            )
+            return
+
         # Check sender whitelist
         if event.sender not in self.allowed_users:
             log.debug("Ignoring message from non-whitelisted user %s", event.sender)
             return
 
-        msg = ChatMessage(
+        msg = AssistantMessage(
+            source=MessageSource.MATRIX,
+            input_type=InputType.TEXT,
+            content=event.body,
             room_id=room.room_id,
             sender=event.sender,
-            text=event.body,
-            timestamp=event.server_timestamp,
             event_id=event.event_id,
         )
-        log.info("Chat message from %s: %s", msg.sender, msg.text[:80])
+        log.info("Chat message from %s: %s", msg.sender, str(msg.content)[:80])
         self.incoming_queue.put(msg)
 
     async def _send_text(self, room_id: str, text: str) -> None:
@@ -216,6 +226,15 @@ class MatrixBridge:
             return
 
         if event.sender == self.user_id:
+            return
+
+        # Ignore messages that predate this session
+        if self._start_timestamp and event.server_timestamp < self._start_timestamp:
+            log.debug(
+                "Ignoring old audio message (ts=%d < %d)",
+                event.server_timestamp,
+                self._start_timestamp,
+            )
             return
 
         if event.sender not in self.allowed_users:
@@ -285,15 +304,16 @@ class MatrixBridge:
         # Send transcript as quote
         await self._send_text(room.room_id, f"> Transkript: {text}")
 
-        # Create ChatMessage and enqueue
-        msg = ChatMessage(
+        # Create AssistantMessage and enqueue
+        msg = AssistantMessage(
+            source=MessageSource.MATRIX,
+            input_type=InputType.TEXT,
+            content=text,
             room_id=room.room_id,
             sender=event.sender,
-            text=text,
-            timestamp=event.server_timestamp,
             event_id=event.event_id,
         )
-        log.info("Audio message from %s transcribed: %s", msg.sender, msg.text[:80])
+        log.info("Audio message from %s transcribed: %s", msg.sender, str(msg.content)[:80])
         self.incoming_queue.put(msg)
 
     async def _response_sender(self) -> None:
@@ -348,6 +368,7 @@ def start_matrix_thread(
     incoming_queue: queue.Queue,
     outgoing_queue: queue.Queue,
     transcriber: Any = None,
+    start_timestamp: int = 0,
 ) -> tuple[threading.Thread, MatrixBridge]:
     """Start the Matrix bridge in a background daemon thread.
 
@@ -356,6 +377,7 @@ def start_matrix_thread(
         incoming_queue: Queue for messages from Matrix -> main thread.
         outgoing_queue: Queue for responses from main thread -> Matrix.
         transcriber: Optional WhisperTranscriber for audio message support.
+        start_timestamp: Ignore Matrix events older than this (ms since epoch).
 
     Returns:
         Tuple of (thread, bridge) for lifecycle management.
@@ -382,6 +404,7 @@ def start_matrix_thread(
         password=password,
         access_token=access_token,
         transcriber=transcriber,
+        start_timestamp=start_timestamp,
     )
 
     thread = threading.Thread(target=bridge.run_forever, daemon=True, name="matrix-bridge")

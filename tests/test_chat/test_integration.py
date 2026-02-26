@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from sprachassistent.chat.message import ChatMessage
+from sprachassistent.chat.message import AssistantMessage, InputType, MessageSource
 from sprachassistent.main import create_components, run_loop
 
 
@@ -31,17 +31,6 @@ def _make_config():
     }
 
 
-def _make_chat_msg(text="Hello"):
-    """Create a ChatMessage for testing."""
-    return ChatMessage(
-        room_id="!room:matrix.org",
-        sender="@user:matrix.org",
-        text=text,
-        timestamp=1700000000000,
-        event_id="$evt1",
-    )
-
-
 def _make_mock_components():
     """Create mock components for the loop."""
     transcriber = MagicMock()
@@ -62,7 +51,7 @@ def test_voice_and_chat_share_ai_backend():
     player = MagicMock()
     ui = MagicMock()
 
-    incoming = queue.Queue()
+    work_queue = queue.Queue()
     outgoing = queue.Queue()
 
     call_count = 0
@@ -71,7 +60,16 @@ def test_voice_and_chat_share_ai_backend():
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            # First: no wake word, chat message waiting
+            # First: no wake word, but enqueue a chat message on work_queue
+            work_queue.put(
+                AssistantMessage(
+                    source=MessageSource.MATRIX,
+                    input_type=InputType.TEXT,
+                    content="Chat command",
+                    room_id="!room:matrix.org",
+                    sender="@user:matrix.org",
+                )
+            )
             return False
         if call_count == 2:
             # Second: wake word detected for voice
@@ -84,16 +82,14 @@ def test_voice_and_chat_share_ai_backend():
     components["transcriber"].transcribe.return_value = "Voice command"
     components["ai_backend"].ask.return_value = "Response"
 
-    incoming.put(_make_chat_msg("Chat command"))
-
     with pytest.raises(KeyboardInterrupt):
         run_loop(
             components,
             mic,
             player,
             ui,
-            matrix_incoming=incoming,
             matrix_outgoing=outgoing,
+            work_queue=work_queue,
         )
 
     # AI backend should have been called twice: once for chat, once for voice
@@ -110,7 +106,7 @@ def test_chat_waits_during_voice_pipeline():
     player = MagicMock()
     ui = MagicMock()
 
-    incoming = queue.Queue()
+    work_queue = queue.Queue()
     outgoing = queue.Queue()
 
     call_count = 0
@@ -120,12 +116,17 @@ def test_chat_waits_during_voice_pipeline():
         call_count += 1
         if call_count == 1:
             # Immediately detect wake word (voice takes priority)
-            # Add a chat message that should wait
-            incoming.put(_make_chat_msg("Queued chat"))
+            # Add a chat message that should wait in the queue
+            work_queue.put(
+                AssistantMessage(
+                    source=MessageSource.MATRIX,
+                    input_type=InputType.TEXT,
+                    content="Queued chat",
+                    room_id="!room:matrix.org",
+                    sender="@user:matrix.org",
+                )
+            )
             return True
-        if call_count == 2:
-            # Second iteration: process queued chat
-            return False
         raise KeyboardInterrupt
 
     components["wake_word"].process.side_effect = wake_word_side_effect
@@ -140,8 +141,8 @@ def test_chat_waits_during_voice_pipeline():
             mic,
             player,
             ui,
-            matrix_incoming=incoming,
             matrix_outgoing=outgoing,
+            work_queue=work_queue,
         )
 
     # Both voice and chat should have been processed

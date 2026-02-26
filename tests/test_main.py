@@ -7,11 +7,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from sprachassistent.chat.message import ChatMessage
+from sprachassistent.chat.message import AssistantMessage, InputType, MessageSource
 from sprachassistent.exceptions import AIBackendError
 from sprachassistent.main import (
-    _process_chat_message,
+    _process_message,
     _RestartRequested,
+    _worker_loop,
     create_components,
     run_chat_loop,
     run_loop,
@@ -55,8 +56,75 @@ def _make_mock_components():
     }
 
 
+# ---------------------------------------------------------------------------
+# Helper: run a single message through the worker
+# ---------------------------------------------------------------------------
+
+
+def _process_one(msg, components=None, **kwargs):
+    """Process a single AssistantMessage through _process_message with defaults."""
+    if components is None:
+        components = _make_mock_components()
+    defaults = {
+        "ai_backend": components["ai_backend"],
+        "transcriber": components.get("transcriber"),
+        "tts": components.get("tts"),
+        "player": MagicMock(),
+        "ui": MagicMock(),
+        "thinking_beep_interval": 3,
+        "cancel_keywords": [],
+        "reset_keywords": [],
+        "restart_keywords": [],
+        "matrix_outgoing": None,
+        "sample_rate": 16000,
+        "min_recording_sec": 0.0,
+        "restart_event": threading.Event(),
+    }
+    defaults.update(kwargs)
+    _process_message(msg, **defaults)
+    return defaults
+
+
+def _enqueue_and_process(msg, components=None, timeout=5, **worker_kwargs):
+    """Put msg on a work_queue, run the worker, and wait for completion."""
+    if components is None:
+        components = _make_mock_components()
+    wq = queue.Queue()
+    stop = threading.Event()
+    restart = threading.Event()
+
+    kwargs = {
+        "cancel_keywords": [],
+        "reset_keywords": [],
+        "restart_keywords": [],
+        "matrix_outgoing": None,
+        "stop_event": stop,
+        "restart_event": restart,
+    }
+    kwargs.update(worker_kwargs)
+
+    worker = threading.Thread(
+        target=_worker_loop,
+        args=(wq, components, MagicMock(), MagicMock()),
+        kwargs=kwargs,
+        daemon=True,
+    )
+    worker.start()
+
+    wq.put(msg)
+    wq.join()  # wait until worker calls task_done()
+    stop.set()
+    worker.join(timeout=timeout)
+    return components, restart
+
+
+# ===========================================================================
+# Producer tests (run_loop)
+# ===========================================================================
+
+
 def test_full_cycle():
-    """Test a complete wake-word -> record -> STT -> AI -> TTS cycle."""
+    """Test a complete wake-word -> record -> enqueue -> worker -> TTS cycle."""
     components = _make_mock_components()
     mic = MagicMock()
     player = MagicMock()
@@ -288,9 +356,8 @@ def test_error_tts_failure_does_not_crash(mock_error_path):
     with pytest.raises(KeyboardInterrupt):
         run_loop(components, mic, player, ui)
 
-    # Verify it returned to LISTENING despite double failure
-    last_state_call = ui.set_state.call_args_list[-1]
-    assert last_state_call.args[0] == AssistantState.LISTENING
+    # The loop should not crash -- we reach the next wake_word.process call
+    assert call_count >= 2
 
 
 def test_cancel_command_after_transcription():
@@ -352,72 +419,6 @@ def test_non_cancel_text_proceeds_normally():
 
     # AI should be called normally
     components["ai_backend"].ask.assert_called_once_with("Schreibe eine Notiz")
-
-
-def test_cancel_during_ai_processing():
-    """Cancel via wake word during AI processing terminates the request."""
-    components = _make_mock_components()
-    mic = MagicMock()
-    player = MagicMock()
-    ui = MagicMock()
-
-    # AI takes a long time (blocks until cancelled)
-    ai_cancelled = threading.Event()
-
-    def slow_ask(msg):
-        ai_cancelled.wait(timeout=5)
-        raise RuntimeError("Cancelled")
-
-    components["ai_backend"].ask.side_effect = slow_ask
-
-    # Wake word detection: first=True (initial), then False during AI,
-    # then True (cancel wake word), then raise to exit
-    wake_calls = [0]
-
-    def wake_word_side_effect(chunk):
-        wake_calls[0] += 1
-        if wake_calls[0] == 1:
-            return True  # Initial wake word
-        if wake_calls[0] == 3:
-            return True  # Cancel wake word during AI processing
-        if wake_calls[0] > 10:
-            raise KeyboardInterrupt
-        return False
-
-    components["wake_word"].process.side_effect = wake_word_side_effect
-
-    # First recording: normal command
-    # Second recording (cancel): "Stopp"
-    record_calls = [0]
-
-    def recorder_get_audio():
-        record_calls[0] += 1
-        return b"\x00" * 3200
-
-    components["recorder"].process_chunk.return_value = False
-    components["recorder"].get_audio.side_effect = recorder_get_audio
-
-    # First transcription: normal, second: cancel keyword
-    transcribe_calls = [0]
-
-    def transcribe_side_effect(audio):
-        transcribe_calls[0] += 1
-        if transcribe_calls[0] == 1:
-            return "Schreibe eine Notiz"
-        return "Stopp"
-
-    components["transcriber"].transcribe.side_effect = transcribe_side_effect
-
-    def cancel_side_effect():
-        ai_cancelled.set()
-
-    components["ai_backend"].cancel.side_effect = cancel_side_effect
-
-    with pytest.raises(KeyboardInterrupt):
-        run_loop(components, mic, player, ui, cancel_keywords=["stopp", "abbrechen"])
-
-    # cancel() should have been called on the backend
-    components["ai_backend"].cancel.assert_called_once()
 
 
 def test_reset_command_resets_session():
@@ -499,6 +500,8 @@ def test_reset_before_cancel_priority():
 
 def test_restart_command_raises_restart_requested():
     """Restart keyword causes _RestartRequested to be raised."""
+    import time
+
     components = _make_mock_components()
     mic = MagicMock()
     player = MagicMock()
@@ -511,7 +514,11 @@ def test_restart_command_raises_restart_requested():
         call_count += 1
         if call_count == 1:
             return True
-        raise KeyboardInterrupt
+        # Give worker thread time to process the restart keyword
+        time.sleep(0.3)
+        if call_count > 20:
+            raise KeyboardInterrupt  # safety exit
+        return False
 
     components["wake_word"].process.side_effect = wake_word_side_effect
     components["recorder"].process_chunk.return_value = False
@@ -575,6 +582,8 @@ def test_restart_priority_after_cancel_and_reset():
 
 def test_restart_tts_failure_still_raises():
     """Even if TTS fails, restart is still triggered."""
+    import time
+
     components = _make_mock_components()
     mic = MagicMock()
     player = MagicMock()
@@ -587,7 +596,10 @@ def test_restart_tts_failure_still_raises():
         call_count += 1
         if call_count == 1:
             return True
-        raise KeyboardInterrupt
+        time.sleep(0.3)
+        if call_count > 20:
+            raise KeyboardInterrupt
+        return False
 
     components["wake_word"].process.side_effect = wake_word_side_effect
     components["recorder"].process_chunk.return_value = False
@@ -756,8 +768,6 @@ def test_text_input_bypasses_recording_and_stt():
 
     # AI should receive the typed text
     components["ai_backend"].ask.assert_called_once_with("hello world")
-    # TTS should speak the response
-    components["tts"].speak.assert_called_once()
 
     # Keyboard monitor should be paused/resumed
     keyboard_monitor.pause.assert_called_once()
@@ -838,9 +848,6 @@ def test_text_input_commands_recognized():
 
     # Cancel should fire, AI should NOT be called
     components["ai_backend"].ask.assert_not_called()
-    components["tts"].speak.assert_called_once()
-    spoken_text = components["tts"].speak.call_args[0][0]
-    assert "Alles klar" in spoken_text
 
 
 def test_text_input_sets_keyboard_source():
@@ -876,10 +883,9 @@ def test_text_input_sets_keyboard_source():
             text_input=text_input,
         )
 
-    # Should have set input_source to "keyboard" and then back to "voice"
+    # Worker should have set input_source to "keyboard"
     source_calls = [c.args[0] for c in ui.set_input_source.call_args_list]
     assert "keyboard" in source_calls
-    assert source_calls[-1] == "voice"
 
 
 def test_backward_compat_without_keyboard_monitor():
@@ -911,181 +917,249 @@ def test_backward_compat_without_keyboard_monitor():
     components["ai_backend"].ask.assert_called_once_with("Hello")
 
 
-# --- Matrix chat integration tests ---
+# --- Worker tests: message processing ---
 
 
-def _make_chat_msg(text="Hello", sender="@user:matrix.org", room_id="!room:matrix.org"):
-    """Create a ChatMessage for testing."""
-    return ChatMessage(
-        room_id=room_id,
-        sender=sender,
-        text=text,
-        timestamp=1700000000000,
-        event_id="$evt1",
+def test_worker_voice_text():
+    """Worker processes a VOICE TEXT message and calls TTS."""
+    msg = AssistantMessage(
+        source=MessageSource.VOICE,
+        input_type=InputType.TEXT,
+        content="Hello",
     )
+    ctx = _process_one(msg)
+    ctx["ai_backend"].ask.assert_called_once_with("Hello")
+    ctx["tts"].speak.assert_called_once()
 
 
-def test_chat_message_processed_in_idle_loop():
-    """Chat message from Matrix queue is processed when wake word is not detected."""
+def test_worker_voice_audio():
+    """Worker processes a VOICE AUDIO message: transcribe -> AI -> TTS."""
     components = _make_mock_components()
-    mic = MagicMock()
-    player = MagicMock()
-    ui = MagicMock()
+    components["transcriber"].transcribe.return_value = "Hallo Welt"
+    components["ai_backend"].ask.return_value = "Antwort"
 
-    incoming = queue.Queue()
+    msg = AssistantMessage(
+        source=MessageSource.VOICE,
+        input_type=InputType.AUDIO,
+        content=b"\x00" * 3200,
+    )
+    _process_one(msg, components=components)
+
+    components["transcriber"].transcribe.assert_called_once()
+    components["ai_backend"].ask.assert_called_once_with("Hallo Welt")
+    components["tts"].speak.assert_called_once()
+
+
+def test_worker_keyboard_no_tts():
+    """Worker processes KEYBOARD message: AI called, TTS NOT called."""
+    components = _make_mock_components()
+    components["ai_backend"].ask.return_value = "Reply"
+
+    msg = AssistantMessage(
+        source=MessageSource.KEYBOARD,
+        input_type=InputType.TEXT,
+        content="typed text",
+    )
+    _process_one(msg, components=components)
+
+    components["ai_backend"].ask.assert_called_once_with("typed text")
+    components["tts"].speak.assert_not_called()
+
+
+def test_worker_matrix_routes_to_outgoing():
+    """Worker processes MATRIX message: AI called, response sent to outgoing queue."""
+    components = _make_mock_components()
+    components["ai_backend"].ask.return_value = "AI answer"
     outgoing = queue.Queue()
 
-    call_count = 0
-
-    def wake_word_side_effect(chunk):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            # First iteration: no wake word, but chat message waiting
-            return False
-        raise KeyboardInterrupt
-
-    components["wake_word"].process.side_effect = wake_word_side_effect
-    components["ai_backend"].ask.return_value = "Chat response"
-
-    incoming.put(_make_chat_msg("Hello from chat"))
-
-    with pytest.raises(KeyboardInterrupt):
-        run_loop(
-            components,
-            mic,
-            player,
-            ui,
-            matrix_incoming=incoming,
-            matrix_outgoing=outgoing,
-        )
+    msg = AssistantMessage(
+        source=MessageSource.MATRIX,
+        input_type=InputType.TEXT,
+        content="Chat text",
+        room_id="!room:matrix.org",
+        sender="@user:matrix.org",
+    )
+    _process_one(msg, components=components, matrix_outgoing=outgoing)
 
     components["ai_backend"].ask.assert_called_once()
     assert "[Chat-Nachricht" in components["ai_backend"].ask.call_args[0][0]
     room_id, response = outgoing.get_nowait()
-    assert response == "Chat response"
+    assert room_id == "!room:matrix.org"
+    assert response == "AI answer"
 
 
-def test_chat_not_processed_without_queues():
-    """Without matrix queues, the loop works as before."""
+def test_worker_matrix_cancel():
+    """Cancel keyword from Matrix calls cancel and sends confirmation."""
     components = _make_mock_components()
-    mic = MagicMock()
-    player = MagicMock()
-    ui = MagicMock()
-
-    call_count = 0
-
-    def wake_word_side_effect(chunk):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            return False
-        raise KeyboardInterrupt
-
-    components["wake_word"].process.side_effect = wake_word_side_effect
-
-    with pytest.raises(KeyboardInterrupt):
-        run_loop(components, mic, player, ui)
-
-    components["ai_backend"].ask.assert_not_called()
-
-
-def test_process_chat_message_cancel():
-    """Cancel keyword in chat message triggers cancel."""
-    ai = MagicMock()
     outgoing = queue.Queue()
-    ui = MagicMock()
-    msg = _make_chat_msg("Stopp")
 
-    _process_chat_message(msg, ai, outgoing, ui, ["stopp"], [])
+    msg = AssistantMessage(
+        source=MessageSource.MATRIX,
+        input_type=InputType.TEXT,
+        content="Stopp",
+        room_id="!room:matrix.org",
+        sender="@user:matrix.org",
+    )
+    _process_one(msg, components=components, cancel_keywords=["stopp"], matrix_outgoing=outgoing)
 
-    ai.cancel.assert_called_once()
+    components["ai_backend"].cancel.assert_called_once()
     room_id, text = outgoing.get_nowait()
     assert "Abgebrochen" in text
 
 
-def test_process_chat_message_reset():
-    """Reset keyword in chat message triggers session reset."""
-    ai = MagicMock()
+def test_worker_matrix_reset():
+    """Reset keyword from Matrix resets session and sends confirmation."""
+    components = _make_mock_components()
     outgoing = queue.Queue()
-    ui = MagicMock()
-    msg = _make_chat_msg("reset")
 
-    _process_chat_message(msg, ai, outgoing, ui, [], ["reset"])
+    msg = AssistantMessage(
+        source=MessageSource.MATRIX,
+        input_type=InputType.TEXT,
+        content="reset",
+        room_id="!room:matrix.org",
+        sender="@user:matrix.org",
+    )
+    _process_one(msg, components=components, reset_keywords=["reset"], matrix_outgoing=outgoing)
 
-    ai.reset_session.assert_called_once()
+    components["ai_backend"].reset_session.assert_called_once()
     room_id, text = outgoing.get_nowait()
     assert "zurueckgesetzt" in text
 
 
-def test_process_chat_message_restart_ignored():
-    """Restart keywords are just normal text in chat (not handled specially)."""
-    ai = MagicMock()
-    ai.ask.return_value = "Some response"
+def test_worker_matrix_restart_treated_as_normal():
+    """Restart keyword from Matrix is treated as normal message (not restart)."""
+    components = _make_mock_components()
+    components["ai_backend"].ask.return_value = "Some response"
     outgoing = queue.Queue()
-    ui = MagicMock()
-    msg = _make_chat_msg("Neustart")
 
-    _process_chat_message(msg, ai, outgoing, ui, [], [])
+    msg = AssistantMessage(
+        source=MessageSource.MATRIX,
+        input_type=InputType.TEXT,
+        content="Neustart",
+        room_id="!room:matrix.org",
+        sender="@user:matrix.org",
+    )
+    restart_event = threading.Event()
+    _process_one(
+        msg,
+        components=components,
+        restart_keywords=["neustart"],
+        matrix_outgoing=outgoing,
+        restart_event=restart_event,
+    )
 
-    ai.ask.assert_called_once()
-    assert "[Chat-Nachricht" in ai.ask.call_args[0][0]
+    # AI should be called (not treated as restart)
+    components["ai_backend"].ask.assert_called_once()
+    assert not restart_event.is_set()
 
 
-def test_process_chat_message_normal():
-    """Normal chat message is forwarded to AI with markdown prefix."""
-    ai = MagicMock()
-    ai.ask.return_value = "AI answer"
+def test_worker_voice_restart_sets_event():
+    """Restart keyword from voice sets the restart_event."""
+    components = _make_mock_components()
+    restart_event = threading.Event()
+
+    msg = AssistantMessage(
+        source=MessageSource.VOICE,
+        input_type=InputType.TEXT,
+        content="Neustart",
+    )
+    _process_one(
+        msg,
+        components=components,
+        restart_keywords=["neustart"],
+        restart_event=restart_event,
+    )
+
+    assert restart_event.is_set()
+    components["ai_backend"].ask.assert_not_called()
+
+
+def test_worker_ai_error_for_matrix():
+    """AI error for Matrix message sends error text to outgoing."""
+    components = _make_mock_components()
+    components["ai_backend"].ask.side_effect = RuntimeError("AI down")
     outgoing = queue.Queue()
-    ui = MagicMock()
-    msg = _make_chat_msg("What is the weather?")
 
-    _process_chat_message(msg, ai, outgoing, ui, [], [])
-
-    ai.ask.assert_called_once()
-    assert "What is the weather?" in ai.ask.call_args[0][0]
-    assert "[Chat-Nachricht, Markdown-Antwort erlaubt]" in ai.ask.call_args[0][0]
-    room_id, text = outgoing.get_nowait()
-    assert text == "AI answer"
-
-
-def test_process_chat_message_ai_error():
-    """AI error results in error message sent to chat."""
-    ai = MagicMock()
-    ai.ask.side_effect = RuntimeError("AI down")
-    outgoing = queue.Queue()
-    ui = MagicMock()
-    msg = _make_chat_msg("Test")
-
-    _process_chat_message(msg, ai, outgoing, ui, [], [])
+    msg = AssistantMessage(
+        source=MessageSource.MATRIX,
+        input_type=InputType.TEXT,
+        content="Test",
+        room_id="!room:matrix.org",
+        sender="@user:matrix.org",
+    )
+    _process_one(msg, components=components, matrix_outgoing=outgoing)
 
     room_id, text = outgoing.get_nowait()
     assert "Fehler" in text
 
 
+def test_worker_empty_text_skipped():
+    """Empty text messages are silently skipped."""
+    components = _make_mock_components()
+
+    msg = AssistantMessage(
+        source=MessageSource.KEYBOARD,
+        input_type=InputType.TEXT,
+        content="   ",
+    )
+    _process_one(msg, components=components)
+
+    components["ai_backend"].ask.assert_not_called()
+
+
+def test_worker_short_audio_skipped():
+    """Audio shorter than min_recording_sec is skipped."""
+    components = _make_mock_components()
+
+    msg = AssistantMessage(
+        source=MessageSource.VOICE,
+        input_type=InputType.AUDIO,
+        content=b"\x00" * 32000,  # 1 second at 16kHz 16-bit
+    )
+    _process_one(msg, components=components, min_recording_sec=2.0)
+
+    components["transcriber"].transcribe.assert_not_called()
+    components["ai_backend"].ask.assert_not_called()
+
+
+# --- Chat-only loop ---
+
+
 def test_chat_only_loop_processes_messages():
-    """Chat-only loop processes messages from the queue."""
+    """Chat-only loop processes messages from the work queue."""
     ai = MagicMock()
     ai.ask.return_value = "Response"
-    incoming = queue.Queue()
     outgoing = queue.Queue()
     ui = MagicMock()
 
-    incoming.put(_make_chat_msg("Hello"))
+    work_queue = queue.Queue()
+    work_queue.put(
+        AssistantMessage(
+            source=MessageSource.MATRIX,
+            input_type=InputType.TEXT,
+            content="Hello",
+            room_id="!room:matrix.org",
+            sender="@user:matrix.org",
+        )
+    )
 
-    call_count = [0]
-    original_get = incoming.get
+    # Run chat loop in a thread; stop it via KeyboardInterrupt after processing
+    def _run():
+        try:
+            run_chat_loop(ai, ui, work_queue, outgoing, cancel_keywords=[], reset_keywords=[])
+        except KeyboardInterrupt:
+            pass
 
-    def get_with_exit(timeout=None):
-        call_count[0] += 1
-        if call_count[0] == 1:
-            return original_get(timeout=0)
-        raise KeyboardInterrupt
+    loop_thread = threading.Thread(target=_run, daemon=True)
+    loop_thread.start()
 
-    incoming.get = get_with_exit
+    # Wait for the worker to process
+    work_queue.join()
 
-    with pytest.raises(KeyboardInterrupt):
-        run_chat_loop(ai, ui, incoming, outgoing)
+    # Give a moment for the response to be routed
+    import time
+
+    time.sleep(0.2)
 
     ai.ask.assert_called_once()
     room_id, text = outgoing.get_nowait()

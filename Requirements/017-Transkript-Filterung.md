@@ -59,30 +59,30 @@ Weiterverarbeitung (AI, Chat-Antwort usw.)
 
 ### Artefakt-Filterung
 
-- [ ] Konfigurierbare Liste `stt.filter_phrases` in `config.yaml`
-- [ ] Bekannte Phrase "Untertitel der Amara.org-Community" ist als Standard enthalten
-- [ ] Phrasen werden case-insensitiv aus Transkripten entfernt
-- [ ] Filterfunktion in `stt/whisper_api.py` als Methode des Transcribers
-- [ ] Voice-Pfad nutzt die Filterung nach `transcribe()`
-- [ ] Matrix-Audio-Pfad nutzt die Filterung nach `transcribe_file()`
+- [x] Konfigurierbare Liste `stt.filter_phrases` in `config.yaml`
+- [x] Bekannte Phrase "Untertitel der Amara.org-Community" ist als Standard enthalten
+- [x] Phrasen werden case-insensitiv aus Transkripten entfernt
+- [x] Filterfunktion in `stt/whisper_api.py` als Methode des Transcribers
+- [x] Voice-Pfad nutzt die Filterung nach `transcribe()`
+- [x] Matrix-Audio-Pfad nutzt die Filterung nach `transcribe_file()`
 
 ### Mindestdauer
 
-- [ ] Konfigurierbarer Wert `audio.min_recording_sec` in `config.yaml` (Standard: 2.0)
-- [ ] Voice-Aufnahmen unter der Mindestdauer werden nicht transkribiert
-- [ ] Stattdessen wird leise zurueck zum Lauschen gewechselt (kein Fehler)
+- [x] Konfigurierbarer Wert `audio.min_recording_sec` in `config.yaml` (Standard: 2.0)
+- [x] Voice-Aufnahmen unter der Mindestdauer werden nicht transkribiert
+- [x] Stattdessen wird leise zurueck zum Lauschen gewechselt (kein Fehler)
 
 ### Leertext-Behandlung
 
-- [ ] Nach Filterung leere Transkripte werden in allen Pfaden korrekt ignoriert
-- [ ] Bestehendes Verhalten fuer bereits leere Transkripte bleibt erhalten
+- [x] Nach Filterung leere Transkripte werden in allen Pfaden korrekt ignoriert
+- [x] Bestehendes Verhalten fuer bereits leere Transkripte bleibt erhalten
 
 ### Tests
 
-- [ ] Unit-Tests fuer die Filterfunktion (Phrase entfernt, case-insensitiv, mehrere Phrasen)
-- [ ] Unit-Tests fuer die Mindestdauer-Pruefung
-- [ ] Unit-Tests fuer Leertext nach Filterung
-- [ ] Bestehende Tests laufen unveraendert durch
+- [x] Unit-Tests fuer die Filterfunktion (Phrase entfernt, case-insensitiv, mehrere Phrasen)
+- [x] Unit-Tests fuer die Mindestdauer-Pruefung
+- [x] Unit-Tests fuer Leertext nach Filterung
+- [x] Bestehende Tests laufen unveraendert durch
 
 ---
 
@@ -140,4 +140,4 @@ Keine.
 
 ## 9. Status
 
-- [ ] Offen
+- [x] Umgesetzt (2026-02-26)

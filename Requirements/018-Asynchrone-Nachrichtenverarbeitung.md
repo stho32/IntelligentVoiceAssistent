@@ -126,55 +126,55 @@ Jede Antwort wird **immer** im Terminal angezeigt (Konsolenausgabe). Zusaetzlich
 
 ### Einheitliche Queue
 
-- [ ] Neuer Datentyp `AssistantMessage` mit Feldern: `source`, `input_type`, `content`, `room_id`, `sender`, `event_id`
-- [ ] Enum `MessageSource` mit Werten `VOICE`, `KEYBOARD`, `MATRIX`
-- [ ] Enum `InputType` mit Werten `TEXT`, `AUDIO`
-- [ ] Gemeinsame `queue.Queue` fuer alle Eingabequellen
+- [x] Neuer Datentyp `AssistantMessage` mit Feldern: `source`, `input_type`, `content`, `room_id`, `sender`, `event_id`
+- [x] Enum `MessageSource` mit Werten `VOICE`, `KEYBOARD`, `MATRIX`
+- [x] Enum `InputType` mit Werten `TEXT`, `AUDIO`
+- [x] Gemeinsame `queue.Queue` fuer alle Eingabequellen
 
 ### Produzenten
 
-- [ ] Voice-Pfad schreibt `AssistantMessage(VOICE, AUDIO, pcm_bytes)` in die Queue
-- [ ] Tastatur-Pfad schreibt `AssistantMessage(KEYBOARD, TEXT, text)` in die Queue
-- [ ] Matrix-Bridge schreibt `AssistantMessage(MATRIX, TEXT|AUDIO, content)` in die Queue
-- [ ] Alle Produzenten arbeiten unabhaengig voneinander
+- [x] Voice-Pfad schreibt `AssistantMessage(VOICE, AUDIO, pcm_bytes)` in die Queue
+- [x] Tastatur-Pfad schreibt `AssistantMessage(KEYBOARD, TEXT, text)` in die Queue
+- [x] Matrix-Bridge schreibt `AssistantMessage(MATRIX, TEXT|AUDIO, content)` in die Queue
+- [x] Alle Produzenten arbeiten unabhaengig voneinander
 
 ### Worker
 
-- [ ] Einzelner Worker-Thread verarbeitet Nachrichten sequentiell aus der Queue
-- [ ] Audio-Nachrichten werden transkribiert (STT)
-- [ ] Transkript-Filterung wird angewendet (Req 017)
-- [ ] Kommandos (Cancel, Reset, Restart) werden erkannt und ausgefuehrt
-- [ ] KI-Anfrage wird gestellt
-- [ ] Antwort wird basierend auf `source` geroutet
+- [x] Einzelner Worker-Thread verarbeitet Nachrichten sequentiell aus der Queue
+- [x] Audio-Nachrichten werden transkribiert (STT)
+- [x] Transkript-Filterung wird angewendet (Req 017)
+- [x] Kommandos (Cancel, Reset, Restart) werden erkannt und ausgefuehrt
+- [x] KI-Anfrage wird gestellt
+- [x] Antwort wird basierend auf `source` geroutet
 
 ### Antwort-Routing
 
-- [ ] Alle Antworten werden im Terminal angezeigt (Konsolenausgabe)
-- [ ] Voice-Antworten werden zusaetzlich per TTS gesprochen + Ready-Sound
-- [ ] Keyboard-Antworten nur im Terminal (keine zusaetzliche Ausgabe)
-- [ ] Matrix-Antworten werden zusaetzlich in den richtigen Raum gesendet
+- [x] Alle Antworten werden im Terminal angezeigt (Konsolenausgabe)
+- [x] Voice-Antworten werden zusaetzlich per TTS gesprochen + Ready-Sound
+- [x] Keyboard-Antworten nur im Terminal (keine zusaetzliche Ausgabe)
+- [x] Matrix-Antworten werden zusaetzlich in den richtigen Raum gesendet
 
 ### Matrix: Nur neue Nachrichten
 
-- [ ] Beim Start werden nur Nachrichten verarbeitet, die nach dem Startzeitpunkt eingehen
-- [ ] Historische Nachrichten (vor dem Start) werden ignoriert
-- [ ] Server-Timestamp des Events wird mit dem Startzeitpunkt verglichen
+- [x] Beim Start werden nur Nachrichten verarbeitet, die nach dem Startzeitpunkt eingehen
+- [x] Historische Nachrichten (vor dem Start) werden ignoriert
+- [x] Server-Timestamp des Events wird mit dem Startzeitpunkt verglichen
 
 ### Nebenlaeufikgeit
 
-- [ ] Neue Eingaben koennen waehrend laufender Verarbeitung gemacht werden
-- [ ] Wake-Word-Erkennung laeuft unterbrechungsfrei
-- [ ] Matrix-Nachrichten werden sofort empfangen und eingereiht
+- [x] Neue Eingaben koennen waehrend laufender Verarbeitung gemacht werden
+- [x] Wake-Word-Erkennung laeuft unterbrechungsfrei
+- [x] Matrix-Nachrichten werden sofort empfangen und eingereiht
 - [ ] UI zeigt an, wie viele Nachrichten in der Queue warten (optional)
 
 ### Tests
 
-- [ ] Unit-Tests fuer `AssistantMessage` und Enums
-- [ ] Unit-Tests fuer Worker-Thread (Verarbeitung, Routing)
-- [ ] Unit-Tests fuer Queue-Integration der Produzenten
-- [ ] Integrations-Test: Voice → Queue → Worker → TTS
-- [ ] Integrations-Test: Matrix → Queue → Worker → Matrix-Antwort
-- [ ] Bestehende Tests laufen unveraendert durch
+- [x] Unit-Tests fuer `AssistantMessage` und Enums
+- [x] Unit-Tests fuer Worker-Thread (Verarbeitung, Routing)
+- [x] Unit-Tests fuer Queue-Integration der Produzenten
+- [x] Integrations-Test: Voice → Queue → Worker → TTS
+- [x] Integrations-Test: Matrix → Queue → Worker → Matrix-Antwort
+- [x] Bestehende Tests laufen unveraendert durch
 
 ---
 
@@ -223,4 +223,4 @@ Keine neuen.
 
 ## 9. Status
 
-- [ ] Offen
+- [x] Umgesetzt

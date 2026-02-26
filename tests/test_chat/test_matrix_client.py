@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from sprachassistent.chat.matrix_client import MatrixBridge, start_matrix_thread
-from sprachassistent.chat.message import ChatMessage
+from sprachassistent.chat.message import AssistantMessage, InputType, MessageSource
 from sprachassistent.exceptions import MatrixChatError, TranscriptionError
 
 _SENTINEL = object()
@@ -33,6 +33,7 @@ def _make_bridge(
     *,
     password="",
     access_token="test_token",
+    start_timestamp=0,
 ):
     """Create a MatrixBridge with default test values."""
     if allowed_users is _SENTINEL:
@@ -47,6 +48,7 @@ def _make_bridge(
         outgoing_queue=outgoing or queue.Queue(),
         password=password,
         access_token=access_token,
+        start_timestamp=start_timestamp,
     )
 
 
@@ -80,9 +82,11 @@ class TestOnMessage:
         asyncio.run(bridge._on_message(room, event))
 
         msg = incoming.get_nowait()
-        assert isinstance(msg, ChatMessage)
+        assert isinstance(msg, AssistantMessage)
+        assert msg.source == MessageSource.MATRIX
+        assert msg.input_type == InputType.TEXT
+        assert msg.content == "Hello"
         assert msg.sender == "@user:matrix.org"
-        assert msg.text == "Hello"
 
     def test_unknown_user_ignored(self):
         """Message from a non-whitelisted user is ignored."""
@@ -127,6 +131,30 @@ class TestOnMessage:
         asyncio.run(bridge._on_message(room, event))
 
         assert incoming.empty()
+
+    def test_old_message_ignored(self):
+        """Messages older than start_timestamp are ignored."""
+        incoming = queue.Queue()
+        bridge = _make_bridge(incoming=incoming, start_timestamp=1700000001)
+        room = _make_room()
+        event = _make_event(timestamp=1700000000)  # before start
+
+        asyncio.run(bridge._on_message(room, event))
+
+        assert incoming.empty()
+
+    def test_new_message_accepted(self):
+        """Messages at or after start_timestamp are accepted."""
+        incoming = queue.Queue()
+        bridge = _make_bridge(incoming=incoming, start_timestamp=1700000000)
+        room = _make_room()
+        event = _make_event(timestamp=1700000000)  # exactly at start
+
+        asyncio.run(bridge._on_message(room, event))
+
+        msg = incoming.get_nowait()
+        assert isinstance(msg, AssistantMessage)
+        assert msg.content == "Hello"
 
 
 class TestResponseSender:
@@ -259,6 +287,26 @@ class TestStartMatrixThread:
 
         call_kwargs = mock_bridge_cls.call_args.kwargs
         assert call_kwargs["password"] == "env_pass"
+        thread.join(timeout=1)
+
+    @patch("sprachassistent.chat.matrix_client.MatrixBridge")
+    def test_start_timestamp_passed(self, mock_bridge_cls):
+        """start_timestamp parameter is forwarded to the bridge."""
+        mock_bridge_cls.return_value.run_forever = MagicMock()
+        config = {
+            "homeserver": "https://matrix.org",
+            "user_id": "@bot:matrix.org",
+            "access_token": "token",
+            "room_id": "!room:matrix.org",
+            "allowed_users": [],
+        }
+
+        thread, bridge = start_matrix_thread(
+            config, queue.Queue(), queue.Queue(), start_timestamp=1700000000000
+        )
+
+        call_kwargs = mock_bridge_cls.call_args.kwargs
+        assert call_kwargs["start_timestamp"] == 1700000000000
         thread.join(timeout=1)
 
 
@@ -470,7 +518,7 @@ class TestOnAudioMessage:
     """Tests for the _on_audio_message callback."""
 
     def test_happy_path(self):
-        """Audio is transcribed and ChatMessage is enqueued."""
+        """Audio is transcribed and AssistantMessage is enqueued."""
         incoming = queue.Queue()
         transcriber = MagicMock()
         transcriber.transcribe_file.return_value = "Hallo Welt"
@@ -488,8 +536,10 @@ class TestOnAudioMessage:
             asyncio.run(bridge._on_audio_message(room, event))
 
         msg = incoming.get_nowait()
-        assert isinstance(msg, ChatMessage)
-        assert msg.text == "Hallo Welt"
+        assert isinstance(msg, AssistantMessage)
+        assert msg.source == MessageSource.MATRIX
+        assert msg.input_type == InputType.TEXT
+        assert msg.content == "Hallo Welt"
         assert msg.sender == "@user:matrix.org"
 
         # Transcript quote was sent
@@ -622,7 +672,7 @@ class TestOnAudioMessage:
         assert "Transkription" in sent_body
 
     def test_empty_transcript(self):
-        """Empty transcript sends info message, no ChatMessage enqueued."""
+        """Empty transcript sends info message, no AssistantMessage enqueued."""
         incoming = queue.Queue()
         transcriber = MagicMock()
         transcriber.transcribe_file.return_value = "   "
@@ -699,10 +749,10 @@ class TestOnAudioMessage:
             "Hallo Welt Untertitel der Amara.org-Community"
         )
         msg = incoming.get_nowait()
-        assert msg.text == "Hallo Welt"
+        assert msg.content == "Hallo Welt"
 
     def test_audio_transcript_empty_after_filter(self):
-        """When filtering removes all text, info message is sent, no ChatMessage."""
+        """When filtering removes all text, info message is sent, no AssistantMessage."""
         incoming = queue.Queue()
         transcriber = MagicMock()
         transcriber.transcribe_file.return_value = "Untertitel der Amara.org-Community"
@@ -723,3 +773,21 @@ class TestOnAudioMessage:
         bridge._client.room_send.assert_called_once()
         sent_body = bridge._client.room_send.call_args[1]["content"]["body"]
         assert "nicht transkribiert" in sent_body
+
+    def test_old_audio_message_ignored(self):
+        """Audio messages older than start_timestamp are ignored."""
+        incoming = queue.Queue()
+        transcriber = MagicMock()
+        bridge = _make_audio_bridge(
+            incoming=incoming,
+            transcriber=transcriber,
+            start_timestamp=1700000001,
+        )
+
+        room = _make_room()
+        event = _make_audio_event(timestamp=1700000000)
+
+        asyncio.run(bridge._on_audio_message(room, event))
+
+        assert incoming.empty()
+        transcriber.transcribe_file.assert_not_called()
