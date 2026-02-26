@@ -96,6 +96,8 @@ Alle Feature-Anforderungen liegen in `Requirements/` und folgen dem Schema `NNN-
 - `013`: Cross-Platform-Abstraktion
 - `015`: Matrix-Chat-Integration (optionaler Textkanal via Matrix-Protokoll)
 - `016`: Matrix Audio-Transkription (Sprachnachrichten per Chat)
+- `017`: Transkript-Filterung (Artefakt-Phrasen, Mindestdauer, Leertext)
+- `018`: Asynchrone Nachrichtenverarbeitung (einheitliche Queue, Worker-Thread)
 
 ## Language
 
